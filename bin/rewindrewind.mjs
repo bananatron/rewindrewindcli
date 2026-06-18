@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { createReadStream } from "node:fs";
+import { createReadStream, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -374,7 +374,9 @@ async function sourceMaps(ctx, action) {
 }
 
 async function request(ctx, method, path, options = {}) {
-  const url = new URL(path.startsWith("http") ? path : `${ctx.baseUrl}${path.startsWith("/") ? "" : "/"}${path}`);
+  const base = new URL(ctx.baseUrl);
+  const url = new URL(path, `${ctx.baseUrl}/`);
+  const isConfiguredOrigin = url.origin === base.origin;
   for (const [key, value] of Object.entries(options.query ?? {})) {
     if (value === undefined || value === null || value === false) continue;
     url.searchParams.set(key, value === true ? "true" : String(value));
@@ -382,6 +384,9 @@ async function request(ctx, method, path, options = {}) {
 
   const headers = { accept: "application/json" };
   if (options.auth !== false) {
+    if (!isConfiguredOrigin) {
+      throw new CliError("Refusing to send an API key to a URL outside --base-url. Use --no-auth for public external URLs.", 2);
+    }
     if (!ctx.apiKey) throw new CliError("Missing API key. Set REWINDREWIND_API_KEY or run `rewindrewind configure --api-key <key>`.", 2);
     headers.authorization = `Bearer ${ctx.apiKey}`;
   }
@@ -593,8 +598,15 @@ export class CliError extends Error {
   }
 }
 
-const isEntrypoint = process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href;
-if (isEntrypoint) {
-  const status = await main();
-  process.exitCode = status;
+function isEntrypoint() {
+  if (!process.argv[1]) return false;
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+  } catch {
+    return import.meta.url === pathToFileURL(resolve(process.argv[1])).href;
+  }
+}
+
+if (isEntrypoint()) {
+  process.exitCode = await main();
 }

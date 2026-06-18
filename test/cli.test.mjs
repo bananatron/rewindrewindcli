@@ -1,16 +1,34 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdtemp, readFile, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
+import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 import { main, parseArgv } from "../bin/rewindrewind.mjs";
+
+const execFileP = promisify(execFile);
+const thisDir = dirname(fileURLToPath(import.meta.url));
 
 test("parseArgv supports long options, booleans, and repeated values", () => {
   const parsed = parseArgv(["api", "get", "/api/health", "--query", "a=1", "--query=b=2", "--quiet"]);
   assert.deepEqual(parsed.positionals, ["api", "get", "/api/health"]);
   assert.deepEqual(parsed.options.query, ["a=1", "b=2"]);
   assert.equal(parsed.options.quiet, true);
+});
+
+test("installed bin symlink executes the cli", async () => {
+  const temp = await mkdtemp(join(tmpdir(), "rewindrewindcli-bin-"));
+  try {
+    const link = join(temp, "rewindrewind");
+    await symlink(join(thisDir, "..", "bin", "rewindrewind.mjs"), link);
+    const { stdout } = await execFileP(link, ["--version"]);
+    assert.equal(stdout.trim(), "0.1.0");
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
 });
 
 test("health does not require an api key", async () => {
@@ -58,6 +76,37 @@ test("api command can call public endpoints without auth", async () => {
 
   assert.equal(status, 0);
   assert.equal(seen[0].url, "https://rw.test/openapi.json");
+  assert.equal(seen[0].init.headers.authorization, undefined);
+});
+
+test("api command refuses to send auth to a foreign absolute URL", async () => {
+  let called = false;
+  const io = harness({
+    env: { REWINDREWIND_API_KEY: "rr_prefix_secret" },
+    fetch: async () => {
+      called = true;
+      return jsonResponse({ ok: true });
+    },
+  });
+
+  const status = await main(["api", "get", "https://evil.example.test/capture"], io);
+
+  assert.equal(status, 2);
+  assert.equal(called, false);
+  assert.match(io.stderr.text, /Refusing to send an API key/);
+});
+
+test("api command allows foreign absolute URLs without auth", async () => {
+  const seen = [];
+  const status = await main(["api", "get", "https://status.example.test/health", "--no-auth"], harness({
+    fetch: async (url, init) => {
+      seen.push({ url: String(url), init });
+      return jsonResponse({ ok: true });
+    },
+  }));
+
+  assert.equal(status, 0);
+  assert.equal(seen[0].url, "https://status.example.test/health");
   assert.equal(seen[0].init.headers.authorization, undefined);
 });
 
