@@ -332,12 +332,23 @@ async function issues(ctx, action) {
   }
   if (action === "update") {
     if (!issueId) throw usage("Expected `issues update <issue-id>`.");
-    return request(ctx, "PATCH", `/api/projects/${encodeURIComponent(projectId(ctx))}/issues/${encodeURIComponent(issueId)}`, {
+    const requestedStatus = stringOption(ctx.options, "status");
+    const result = await request(ctx, "PATCH", `/api/projects/${encodeURIComponent(projectId(ctx))}/issues/${encodeURIComponent(issueId)}`, {
       body: bodyFromOptions(ctx.options, [
         ["status", "status", "string"],
         ["assigned-to", "assigned_to", "nullableString"],
       ]),
     });
+    // Defense-in-depth: the API returns ok:true even when nothing changed, so a
+    // dropped update (e.g. a status that didn't stick) would otherwise pass
+    // silently. Surface the mismatch on stderr without disturbing stdout JSON.
+    const returnedStatus = result?.issue?.status;
+    if (requestedStatus && returnedStatus !== undefined && returnedStatus !== requestedStatus) {
+      ctx.streams.stderr.write(
+        `warning: requested status "${requestedStatus}" but issue is "${returnedStatus}" after update\n`,
+      );
+    }
+    return result;
   }
   throw usage("Expected an issues action: list, get, update.");
 }

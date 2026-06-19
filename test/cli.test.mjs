@@ -172,6 +172,33 @@ test("events send merges flags into payload", async () => {
   });
 });
 
+test("issues update warns when the status did not take effect", async () => {
+  const io = harness({
+    env: { REWINDREWIND_API_KEY: "rr_key_secret", REWINDREWIND_PROJECT_ID: "p1" },
+    // Server echoes the issue still "open" despite the request to ignore it.
+    fetch: async () => jsonResponse({ ok: true, issue: { id: "i1", status: "open" } }),
+  });
+
+  const status = await main(["issues", "update", "i1", "--status", "ignored", "--base-url", "https://rw.test"], io);
+
+  assert.equal(status, 0);
+  assert.equal(JSON.parse(io.stdout.text).issue.status, "open");
+  assert.match(io.stderr.text, /requested status "ignored" but issue is "open"/);
+});
+
+test("issues update is silent when the status sticks", async () => {
+  const io = harness({
+    env: { REWINDREWIND_API_KEY: "rr_key_secret", REWINDREWIND_PROJECT_ID: "p1" },
+    fetch: async () => jsonResponse({ ok: true, issue: { id: "i1", status: "ignored" } }),
+  });
+
+  const status = await main(["issues", "update", "i1", "--status", "ignored", "--base-url", "https://rw.test"], io);
+
+  assert.equal(status, 0);
+  assert.equal(JSON.parse(io.stdout.text).issue.status, "ignored");
+  assert.equal(io.stderr.text, "");
+});
+
 function harness(overrides = {}) {
   const stdin = new PassThrough();
   stdin.end();
