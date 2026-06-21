@@ -1,11 +1,12 @@
 {
-  "name": "@rewindrewind/cli",
+  "name": "rewindrewindcli",
   "version": "0.2.0",
   "description": "RewindRewind CLI — set up front-end exceptions, back-end exceptions, and app events, and drive the whole API.",
   "type": "module",
   "bin": {
     "rewindrewind": "./bin/rewindrewind.mjs",
-    "rr": "./bin/rewindrewind.mjs"
+    "rr": "./bin/rewindrewind.mjs",
+    "rewindrewindcli": "./bin/rewindrewind.mjs"
   },
   "files": [
     "bin",

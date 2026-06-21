@@ -10,16 +10,20 @@ in this project, using its CLI. Do it in this exact order.
 
 ## Step 0 — Get the CLI
 
-No install needed. Use one of these to run it (`rr` is a short alias):
+No install needed — run it straight from the public repo:
 
 ```sh
-# Works today, straight from the public repo:
-npx -p github:bananatron/rewindrewindcli rewindrewind <command>
-# Or, once published to npm:
-npx @rewindrewind/cli <command>          # or: npm i -g @rewindrewind/cli
+npx github:bananatron/rewindrewindcli <command>
 ```
 
-In the steps below, `rewindrewind` means whichever form above you chose.
+Optionally install it for a persistent `rewindrewind` (and `rr`) command:
+
+```sh
+npm install -g github:bananatron/rewindrewindcli
+```
+
+In the steps below, `rewindrewind <command>` means `npx github:bananatron/rewindrewindcli <command>`
+(or the installed `rewindrewind` command).
 
 ## Step 1 — Verify we have an API key (do this FIRST)
 

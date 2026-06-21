@@ -1,19 +1,19 @@
-# @rewindrewind/cli
+# rewindrewindcli
 
 The RewindRewind command line. Built for humans and agents: no runtime dependencies, JSON output by default, and one command (`init`) that sets up all three surfaces — **front-end exceptions, back-end exceptions, and app events** — from a single key.
 
 ## Install
 
-Run without installing (best for one-off setup and agents):
+Run without installing, straight from this public repo (best for one-off setup and agents):
 
 ```sh
-npx @rewindrewind/cli init
+npx github:bananatron/rewindrewindcli init
 ```
 
 Install globally for a persistent `rewindrewind` (and `rr`) command:
 
 ```sh
-npm install -g @rewindrewind/cli
+npm install -g github:bananatron/rewindrewindcli
 rewindrewind --help
 ```
 
