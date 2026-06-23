@@ -6,7 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const DEFAULT_BASE_URL = "https://rewindrewind.com";
-const VERSION = "0.2.0";
+const VERSION = "0.2.1";
 
 // RewindRewind uses two kinds of key, and the CLI maps each command to the right
 // one automatically:
@@ -18,88 +18,314 @@ const VERSION = "0.2.0";
 //                             like a Sentry DSN: safe to embed in browsers/servers.
 const ADMIN_PREFIX = "rr_";
 const PROJECT_PREFIX = "rrpub_";
+const DOCS_URL = `${DEFAULT_BASE_URL}/docs/exception-capture-sdk`;
 
-const HELP = `rewindrewind ${VERSION} — RewindRewind CLI for humans and agents
+const COMMAND_DIRECTORY = [
+  { command: "status", summary: "Check admin auth; agents should run this first." },
+  { command: "init", summary: "Configure auth, choose a project, fetch the public project key, print setup snippets." },
+  { command: "verify", summary: "Send test event and exception data and confirm the setup works." },
+  { command: "help [topic]", summary: "Show task help. Topics: agent, auth, sdk, events, exceptions, troubleshooting." },
+  { command: "sdk list|show|snippet|env", summary: "Machine-readable SDK setup pointers and snippets." },
+  { command: "configure | config get|set|unset", summary: "Read and write CLI config." },
+  { command: "projects list|create|get|update|delete", summary: "Manage projects with an admin key." },
+  { command: "events send|batch|list|raw", summary: "Send or inspect product analytics events." },
+  { command: "exceptions send", summary: "Send an exception payload with the public project key." },
+  { command: "issues list|get|update|resolve|reopen|snooze|archive|lifecycle", summary: "Inspect and manage exception issues." },
+  { command: "comments list|create|update|delete", summary: "Work with issue comments." },
+  { command: "sourcemaps upload", summary: "Upload JavaScript source maps for a release." },
+  { command: "api <method> <path>", summary: "Generic API escape hatch; /v1/* uses project key, /api/* uses admin key." },
+  { command: "health | openapi | export | ingestion-health | retention run", summary: "Service and operations commands." },
+];
 
-Quick start:
-  rewindrewind init --api-key rr_xxx     Configure once, get setup for all 3 surfaces
-  rewindrewind verify                    Send test data and confirm it lands
+const GLOBAL_OPTIONS = [
+  { option: "--api-key <key>", summary: "Admin key (rr_...). Also REWINDREWIND_API_KEY." },
+  { option: "--api-key-file <path>", summary: "Read the admin key from a file." },
+  { option: "--project-key <key>", summary: "Project ingestion key (rrpub_...). Also REWINDREWIND_PROJECT_KEY." },
+  { option: "--project-key-file <path>", summary: "Read the project key from a file." },
+  { option: "--project <id>", summary: "Project id. Also REWINDREWIND_PROJECT_ID." },
+  { option: "--base-url <url>", summary: `API origin. Default: ${DEFAULT_BASE_URL}` },
+  { option: "--format <json|pretty>", summary: "JSON output format for data commands. Help supports --format json too." },
+  { option: "--quiet | --verbose", summary: "Suppress normal output or print request URLs." },
+];
 
-Usage:
-  rewindrewind <command> [options]
-  rr <command> [options]                 (rr is an alias)
+const SDK_GUIDES = {
+  browser: {
+    id: "browser",
+    label: "Browser JavaScript",
+    use_when: "Frontend apps that need uncaught error, unhandled rejection, and product event capture.",
+    docs_url: `${DOCS_URL}#javascript-browser-apps`,
+    install: ["npm install @rewindrewind/sdk"],
+    env: ["VITE_REWINDREWIND_PROJECT_KEY=rrpub_xxx", "VITE_REWINDREWIND_ENDPOINT=https://rewindrewind.com"],
+    files: ["src/observability.ts or your app entrypoint"],
+    verify: ["rewindrewind verify", "Trigger a handled test capture from the browser and check issues/events."],
+    snippets: [
+      {
+        title: "Initialize",
+        language: "ts",
+        code: `import { initRewind } from "@rewindrewind/sdk/browser";
 
-The 3 surfaces:
-  Front-end exceptions  browser <script> SDK, auto-captures uncaught errors
-  Back-end exceptions   Node/Bun/Ruby/Python SDKs, or 'exceptions send'
-  App events            product analytics via 'events send' / captureEvent
-  Run 'rewindrewind init' to print copy-paste setup for each, with your key filled in.
+export const rewind = initRewind({
+  endpoint: import.meta.env.VITE_REWINDREWIND_ENDPOINT ?? "https://rewindrewind.com",
+  apiKey: import.meta.env.VITE_REWINDREWIND_PROJECT_KEY,
+  environment: import.meta.env.MODE === "production" ? "production" : "preview",
+  release: import.meta.env.VITE_REWINDREWIND_RELEASE,
+  tags: { service: "web" },
+});`,
+      },
+      {
+        title: "Capture an event",
+        language: "ts",
+        code: `await rewind.captureEvent("checkout.button_clicked", {
+  path: window.location.pathname,
+});`,
+      },
+    ],
+  },
+  node: {
+    id: "node",
+    label: "Node.js",
+    use_when: "Node servers, workers, scripts, queues, and CLIs.",
+    docs_url: `${DOCS_URL}#nodejs-apps`,
+    install: ["npm install @rewindrewind/sdk"],
+    env: ["REWINDREWIND_PROJECT_KEY=rrpub_xxx", "REWINDREWIND_ENDPOINT=https://rewindrewind.com", "REWINDREWIND_RELEASE=<git-sha-or-version>"],
+    files: ["src/observability.ts", "server entrypoint before routes/jobs start"],
+    verify: ["rewindrewind verify", "Run one code path that calls captureEvent or captureException."],
+    snippets: [
+      {
+        title: "Initialize",
+        language: "ts",
+        code: `import { initRewind } from "@rewindrewind/sdk/node";
 
-Keys (auto-selected per command):
-  admin key   (rr_…)     CLI + system management. Secret.
-  project key (rrpub_…)  send events/exceptions/source maps. Public, like a Sentry DSN.
+export const rewind = initRewind({
+  endpoint: process.env.REWINDREWIND_ENDPOINT ?? "https://rewindrewind.com",
+  apiKey: process.env.REWINDREWIND_PROJECT_KEY,
+  environment: process.env.NODE_ENV === "production" ? "production" : "development",
+  release: process.env.REWINDREWIND_RELEASE,
+  tags: { service: "api", runtime: "node" },
+  autoCapture: true,
+});`,
+      },
+      {
+        title: "Capture handled work",
+        language: "ts",
+        code: `try {
+  await runJob(jobId);
+  await rewind.captureEvent("job.completed", { job_id: jobId });
+} catch (error) {
+  await rewind.captureException(error, { job: { id: jobId } });
+  throw error;
+} finally {
+  await rewind.flush();
+}`,
+      },
+    ],
+  },
+  bun: {
+    id: "bun",
+    label: "Bun",
+    use_when: "Bun servers and workers.",
+    docs_url: `${DOCS_URL}#bun-apps`,
+    install: ["bun add @rewindrewind/sdk"],
+    env: ["REWINDREWIND_PROJECT_KEY=rrpub_xxx", "REWINDREWIND_ENDPOINT=https://rewindrewind.com"],
+    files: ["Bun entrypoint before Bun.serve"],
+    verify: ["rewindrewind verify"],
+    snippets: [
+      {
+        title: "Initialize",
+        language: "ts",
+        code: `import { initRewind } from "@rewindrewind/sdk/bun";
 
-Global options:
-  --api-key <key>          Admin key (rr_…).  Also REWINDREWIND_API_KEY.
-  --api-key-file <path>    Read the admin key from a file (long-term auth pointer).
-  --project-key <key>      Project ingestion key (rrpub_…). Also REWINDREWIND_PROJECT_KEY.
-  --project-key-file <path> Read the project key from a file.
-  --project <id>           Project id. Also REWINDREWIND_PROJECT_ID.
-  --base-url <url>         API origin. Default: ${DEFAULT_BASE_URL}
-  --format <json|pretty>   Output format. Default: json
-  --quiet | --verbose
+const rewind = initRewind({
+  endpoint: Bun.env.REWINDREWIND_ENDPOINT ?? "https://rewindrewind.com",
+  apiKey: Bun.env.REWINDREWIND_PROJECT_KEY,
+  environment: Bun.env.REWINDREWIND_ENVIRONMENT ?? "production",
+  release: Bun.env.REWINDREWIND_RELEASE,
+  tags: { service: "edge-api", runtime: "bun" },
+});`,
+      },
+    ],
+  },
+  ruby: {
+    id: "ruby",
+    label: "Ruby",
+    use_when: "Rack apps, background jobs, and plain Ruby services.",
+    docs_url: `${DOCS_URL}#ruby-apps`,
+    install: ["gem install rewind_rewind", "or add `gem \"rewind_rewind\"` to your Gemfile"],
+    env: ["REWINDREWIND_PROJECT_KEY=rrpub_xxx", "REWINDREWIND_ENDPOINT=https://rewindrewind.com"],
+    files: ["config/observability.rb or app boot file"],
+    verify: ["rewindrewind verify"],
+    snippets: [
+      {
+        title: "Initialize",
+        language: "ruby",
+        code: `require "rewind_rewind"
 
-Setup & config:
-  status                          Is an admin key configured and valid? (agent step 1)
-  init [--api-key <key>|--api-key-file <path>] [--project <id>] [--base-url <url>]
-  verify [--environment <name>]
-  configure [--api-key <key>] [--api-key-file <path>] [--project-key <key>]
-            [--project-key-file <path>] [--base-url <url>] [--project <id>]
-  config get
-  config set <name> <value>      names: api-key, api-key-file, project-key,
-                                 project-key-file, base-url, project, format
-  config unset <name>
+REWIND = RewindRewind::Client.new(
+  api_key: ENV.fetch("REWINDREWIND_PROJECT_KEY"),
+  endpoint: ENV.fetch("REWINDREWIND_ENDPOINT", "https://rewindrewind.com"),
+  environment: ENV.fetch("RACK_ENV", "production"),
+  release: ENV["REWINDREWIND_RELEASE"],
+  tags: { service: "web", runtime: "ruby" }
+)`,
+      },
+    ],
+  },
+  rails: {
+    id: "rails",
+    label: "Rails",
+    use_when: "Rails apps that want framework wiring plus the core Ruby SDK.",
+    docs_url: `${DOCS_URL}#ruby-apps`,
+    install: ["gem \"rewind_rewind-rails\""],
+    env: ["REWINDREWIND_PROJECT_KEY=rrpub_xxx", "REWINDREWIND_RELEASE=<git-sha-or-version>"],
+    files: ["Gemfile", "config/initializers/rewind_rewind.rb"],
+    verify: ["rewindrewind verify"],
+    snippets: [
+      {
+        title: "Initializer",
+        language: "ruby",
+        code: `# config/initializers/rewind_rewind.rb
+RewindRewind.configure do |config|
+  config.api_key = ENV.fetch("REWINDREWIND_PROJECT_KEY")
+  config.environment = Rails.env
+  config.release = ENV["REWINDREWIND_RELEASE"]
+  config.tags = { service: "rails" }
+end`,
+      },
+    ],
+  },
+  python: {
+    id: "python",
+    label: "Python",
+    use_when: "Plain Python, Flask, Bottle, WSGI apps, scripts, and workers.",
+    docs_url: `${DOCS_URL}#python-apps`,
+    install: ["pip install --index-url https://rewindrewind.com/pypi/simple/ rewind-rewind"],
+    env: ["REWINDREWIND_PROJECT_KEY=rrpub_xxx", "REWINDREWIND_ENDPOINT=https://rewindrewind.com"],
+    files: ["app startup module", "requirements.txt"],
+    verify: ["rewindrewind verify"],
+    snippets: [
+      {
+        title: "Initialize",
+        language: "py",
+        code: `import os
+import rewind_rewind
 
-Service:
-  health
-  openapi
-  api <method> <path> [--data <json|@file|->] [--query key=value] [--no-auth]
+rewind_rewind.init(
+    project_key=os.environ["REWINDREWIND_PROJECT_KEY"],
+    endpoint=os.getenv("REWINDREWIND_ENDPOINT", "https://rewindrewind.com"),
+    environment=os.getenv("ENVIRONMENT", "production"),
+    release=os.getenv("GIT_SHA"),
+    tags={"service": os.getenv("SERVICE_NAME", "python-app")},
+)`,
+      },
+      {
+        title: "WSGI middleware",
+        language: "py",
+        code: `from rewind_rewind.wsgi import RewindMiddleware
 
-Projects:
-  projects list | create --name <name> [--account-id <id>]
-  projects get | update [--name <name>] [--retention-days <n>] [--disabled <bool>]
-  projects delete                        (all accept --project <id>)
+app.wsgi_app = RewindMiddleware(app.wsgi_app)`,
+      },
+    ],
+  },
+  go: {
+    id: "go",
+    label: "Go",
+    use_when: "Go services and net/http servers.",
+    docs_url: `${DOCS_URL}#go-apps`,
+    install: ["go get rewindrewind.com/go"],
+    env: ["REWINDREWIND_PROJECT_KEY=rrpub_xxx", "REWINDREWIND_ENDPOINT=https://rewindrewind.com"],
+    files: ["main.go or observability package"],
+    verify: ["rewindrewind verify"],
+    snippets: [
+      {
+        title: "Initialize",
+        language: "go",
+        code: `import (
+  "os"
 
-App events  (project key):
-  events send --type <type> [--environment <name>] [--distinct-id <id>]
-              [--properties <json|@file>] [--payload <json|@file|->]
-  events batch --file <json|@file|->
-  events list [--limit <n>] [--cursor <c>] [--type <t>] [--environment <name>]
-  events raw <event-id>
+  rewindrewind "rewindrewind.com/go"
+)
 
-Exceptions  (project key for send; admin key for issues):
-  exceptions send --message <msg> [--environment <name>] [--level <level>]
-                  [--payload <json|@file|->]
-  sentry envelope --file <path|->
-  issues list [--status <status>] [--environment <name>] [--limit <n>]
-  issues get <issue-id>
-  issues update <issue-id> [--status <open|resolved|ignored|muted|regressed>]
-                           [--assigned-to <id|null>]
-  issues resolve <issue-id> [--reason <text>]
-  issues reopen <issue-id> [--reason <text>]
-  issues snooze <issue-id> | issues archive <issue-id>
-  issues lifecycle <issue-id>
-  comments list <issue-id>
-  comments create <issue-id> --body <text>
-  comments update <issue-id> <comment-id> --body <text>
-  comments delete <issue-id> <comment-id>
+rewindrewind.Init(rewindrewind.Config{
+  Key:         os.Getenv("REWINDREWIND_PROJECT_KEY"),
+  Environment: "production",
+  Release:     os.Getenv("REWINDREWIND_RELEASE"),
+})`,
+      },
+    ],
+  },
+};
 
-Source maps & operations:
-  sourcemaps upload --release <version> --file <path> [--file-name <name>]
-  export [--limit <n>] [--before <iso>] [--include-raw]
-  ingestion-health
-  retention run
-`;
+const HELP_TOPICS = {
+  agent: {
+    id: "agent",
+    title: "Agent Setup",
+    summary: "Deterministic setup order for coding agents.",
+    steps: [
+      "Run `rewindrewind status` first.",
+      "If `needs_api_key` is true, stop and ask the user for an admin API key that starts with rr_.",
+      "Run `rewindrewind init` to fetch and save the public project key.",
+      "Wire the needed SDK surfaces into the codebase.",
+      "Run `rewindrewind verify` and report pass/fail.",
+    ],
+    see_also: ["help auth", "help sdk", "help troubleshooting", `${DEFAULT_BASE_URL}/llms.txt`],
+  },
+  auth: {
+    id: "auth",
+    title: "Auth And Keys",
+    summary: "The CLI auto-selects admin vs project keys by command.",
+    details: [
+      "Admin key (rr_...): secret. Used for project management, issues, exports, and API reads.",
+      "Project key (rrpub_...): public ingestion key. Used by SDKs, events send, exceptions send, source maps, and /v1/* API calls.",
+      "Prefer `rewindrewind init --api-key-file <path>` or `config set api-key-file <path>` for long-lived agents.",
+    ],
+    see_also: ["status", "init", "configure", "config get"],
+  },
+  sdk: {
+    id: "sdk",
+    title: "SDK Setup",
+    summary: "Use `rewindrewind help sdk <name>` for human setup and `rewindrewind sdk show <name>` for JSON.",
+    sdks: Object.keys(SDK_GUIDES),
+    see_also: ["sdk list", "sdk show node", "sdk snippet python", DOCS_URL],
+  },
+  events: {
+    id: "events",
+    title: "App Events",
+    summary: "Product analytics events use the public project key.",
+    commands: [
+      "rewindrewind events send --type checkout.completed --properties '{\"total\":42}'",
+      "rewindrewind events batch --file @events.json",
+      "rewindrewind events list --environment production --limit 50",
+      "rewindrewind events raw <event-id>",
+    ],
+    see_also: ["help sdk", `${DOCS_URL}#events`],
+  },
+  exceptions: {
+    id: "exceptions",
+    title: "Exceptions And Issues",
+    summary: "SDKs and `exceptions send` ingest exceptions; issue commands manage grouped failures.",
+    commands: [
+      "rewindrewind exceptions send --message \"Stripe webhook failed\" --level error",
+      "rewindrewind issues list --status open",
+      "rewindrewind issues get <issue-id>",
+      "rewindrewind issues resolve <issue-id> --reason \"fixed in web@1.4.3\"",
+      "rewindrewind sourcemaps upload --release web@1.4.3 --file dist/app.js.map",
+    ],
+    see_also: ["help sdk browser", "help sdk node", `${DOCS_URL}#exceptions`],
+  },
+  troubleshooting: {
+    id: "troubleshooting",
+    title: "Troubleshooting",
+    summary: "Fast checks when setup or ingestion fails.",
+    steps: [
+      "Run `rewindrewind status --format pretty` to validate the admin key and selected project.",
+      "Run `rewindrewind config get --format pretty` and confirm baseUrl, projectId, and projectKey.",
+      "Run `rewindrewind verify --environment development` to exercise service, event, and exception ingestion.",
+      "If ingestion commands complain about rr_ vs rrpub_, re-run `rewindrewind init` to fetch the public project key.",
+      "Use `rewindrewind --verbose <command>` to print request URLs.",
+    ],
+    see_also: ["ingestion-health", "health", "openapi", "api get /api/projects"],
+  },
+};
 
 export async function main(argv = process.argv.slice(2), io = {}) {
   const streams = {
@@ -117,7 +343,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
       return 0;
     }
     if (parsed.options.help || parsed.positionals.length === 0) {
-      streams.stdout.write(HELP);
+      writeHelp(streams.stdout, parsed.positionals, parsed.options);
       return 0;
     }
 
@@ -185,6 +411,10 @@ export function parseArgv(argv) {
 async function dispatch(ctx) {
   const [group, action, third] = ctx.command;
   switch (group) {
+    case "help":
+      return helpCommand(ctx);
+    case "sdk":
+      return sdkCommand(ctx, action);
     case "status":
       return statusCommand(ctx);
     case "init":
@@ -226,6 +456,231 @@ async function dispatch(ctx) {
     default:
       throw usage(`Unknown command: ${[group, action, third].filter(Boolean).join(" ")}`);
   }
+}
+
+function writeHelp(stream, args = [], options = {}) {
+  const payload = helpPayload(args);
+  const format = stringOption(options, "format");
+  if (format === "json" || format === "pretty") {
+    writeOutput(stream, payload, format);
+    return;
+  }
+  stream.write(renderHelp(payload));
+}
+
+function helpCommand(ctx) {
+  writeHelp(ctx.streams.stdout, ctx.command.slice(1), ctx.options);
+}
+
+function sdkCommand(ctx, action) {
+  const sdkId = normalizeSdkId(ctx.command[2]);
+  if (!action || action === "list") {
+    return {
+      ok: true,
+      docs_url: DOCS_URL,
+      sdks: Object.values(SDK_GUIDES).map((sdk) => ({
+        id: sdk.id,
+        label: sdk.label,
+        use_when: sdk.use_when,
+        help: `rewindrewind help sdk ${sdk.id}`,
+        json: `rewindrewind sdk show ${sdk.id}`,
+      })),
+    };
+  }
+  if (action === "show") {
+    const sdk = sdkGuide(sdkId);
+    return { ok: true, sdk };
+  }
+  if (action === "snippet" || action === "snippets") {
+    const sdk = sdkGuide(sdkId);
+    return { ok: true, sdk: sdk.id, snippets: sdk.snippets, docs_url: sdk.docs_url };
+  }
+  if (action === "env") {
+    return {
+      ok: true,
+      env: {
+        admin: {
+          REWINDREWIND_API_KEY: "rr_xxx (secret admin key; CLI management only)",
+          REWINDREWIND_API_KEY_FILE: "path to a file containing the admin key",
+        },
+        project: {
+          REWINDREWIND_PROJECT_KEY: "rrpub_xxx (public ingestion key for SDKs)",
+          REWINDREWIND_PROJECT_KEY_FILE: "path to a file containing the project key",
+          REWINDREWIND_PROJECT_ID: "project id for admin read/update commands",
+          REWINDREWIND_BASE_URL: DEFAULT_BASE_URL,
+        },
+      },
+      note: "Run `rewindrewind init` to fetch and save the project key after configuring an admin key.",
+    };
+  }
+  throw usage("Expected an sdk action: list, show <name>, snippet <name>, env.");
+}
+
+function helpPayload(args = []) {
+  const normalized = args.filter(Boolean).map((arg) => String(arg).toLowerCase());
+  if (normalized.length === 0) return helpDirectoryPayload();
+  if (normalized[0] === "help") return helpDirectoryPayload();
+  if (normalized[0] === "sdk" && normalized[1]) return { kind: "sdk", sdk: sdkGuide(normalizeSdkId(normalized[1])) };
+  if (normalized[0] === "sdk") return { kind: "topic", topic: HELP_TOPICS.sdk };
+  const topic = HELP_TOPICS[normalized[0]];
+  if (topic) return { kind: "topic", topic };
+  const command = COMMAND_DIRECTORY.find((item) => item.command.split(/\s|\|/)[0] === normalized[0]);
+  if (command) return { kind: "command", command, related: commandHelp(normalized[0]) };
+  throw usage(`Unknown help topic: ${args.join(" ")}`);
+}
+
+function helpDirectoryPayload() {
+  return {
+    kind: "directory",
+    name: "rewindrewind",
+    version: VERSION,
+    summary: "RewindRewind CLI for humans and agents.",
+    quick_start: [
+      "rewindrewind status",
+      "rewindrewind init --api-key rr_xxx",
+      "rewindrewind verify",
+    ],
+    topics: Object.values(HELP_TOPICS).map((topic) => ({
+      id: topic.id,
+      title: topic.title,
+      command: `rewindrewind help ${topic.id}`,
+      summary: topic.summary,
+    })),
+    sdk_guides: Object.values(SDK_GUIDES).map((sdk) => ({
+      id: sdk.id,
+      label: sdk.label,
+      command: `rewindrewind help sdk ${sdk.id}`,
+      summary: sdk.use_when,
+    })),
+    commands: COMMAND_DIRECTORY,
+    global_options: GLOBAL_OPTIONS,
+  };
+}
+
+function renderHelp(payload) {
+  if (payload.kind === "directory") return renderDirectoryHelp(payload);
+  if (payload.kind === "topic") return renderTopicHelp(payload.topic);
+  if (payload.kind === "sdk") return renderSdkHelp(payload.sdk);
+  if (payload.kind === "command") return renderCommandHelp(payload.command, payload.related);
+  return `${JSON.stringify(payload, null, 2)}\n`;
+}
+
+function renderDirectoryHelp(payload) {
+  return `rewindrewind ${payload.version} - ${payload.summary}
+
+Usage:
+  rewindrewind <command> [options]
+  rr <command> [options]
+
+First run:
+  rewindrewind status                  Check whether an admin key is configured
+  rewindrewind init --api-key rr_xxx   Configure, choose a project, fetch the public key
+  rewindrewind verify                  Send test data and confirm it lands
+
+Help directory:
+${formatRows(payload.topics.map((topic) => [topic.command, topic.summary]), 38)}
+
+SDK setup:
+${formatRows(payload.sdk_guides.map((sdk) => [sdk.command, sdk.label]), 38)}
+
+Commands:
+${formatRows(payload.commands.map((item) => [item.command, item.summary]), 46)}
+
+Global options:
+${formatRows(payload.global_options.map((item) => [item.option, item.summary]), 28)}
+
+Machine-readable help:
+  rewindrewind --help --format json
+  rewindrewind help sdk node --format json
+  rewindrewind sdk list
+`;
+}
+
+function renderTopicHelp(topic) {
+  const lines = [`${topic.title}`, "", topic.summary, ""];
+  if (topic.steps) lines.push("Steps:", ...topic.steps.map((step) => `  ${step}`), "");
+  if (topic.details) lines.push("Details:", ...topic.details.map((detail) => `  ${detail}`), "");
+  if (topic.commands) lines.push("Commands:", ...topic.commands.map((cmd) => `  ${cmd}`), "");
+  if (topic.sdks) lines.push("SDK guides:", ...topic.sdks.map((id) => `  rewindrewind help sdk ${id}`), "");
+  if (topic.see_also) lines.push("See also:", ...topic.see_also.map((item) => `  ${item}`), "");
+  return `${lines.join("\n")}\n`;
+}
+
+function formatRows(rows, width) {
+  return rows.map(([left, right]) => {
+    if (left.length > width) return `  ${left}\n  ${"".padEnd(width)} ${right}`;
+    return `  ${left.padEnd(width)} ${right}`;
+  }).join("\n");
+}
+
+function renderSdkHelp(sdk) {
+  const lines = [
+    `${sdk.label} SDK`,
+    "",
+    sdk.use_when,
+    "",
+    "Install:",
+    ...sdk.install.map((cmd) => `  ${cmd}`),
+    "",
+    "Environment:",
+    ...sdk.env.map((entry) => `  ${entry}`),
+    "",
+    "Where to wire it:",
+    ...sdk.files.map((file) => `  ${file}`),
+    "",
+  ];
+  for (const snippet of sdk.snippets) {
+    lines.push(`${snippet.title}:`, fence(snippet.language, snippet.code), "");
+  }
+  lines.push("Verify:", ...sdk.verify.map((cmd) => `  ${cmd}`), "", `Full docs: ${sdk.docs_url}`, "");
+  return `${lines.join("\n")}\n`;
+}
+
+function renderCommandHelp(command, related) {
+  const lines = [command.command, "", command.summary, ""];
+  if (related?.usage) lines.push("Usage:", ...related.usage.map((item) => `  ${item}`), "");
+  if (related?.see_also) lines.push("See also:", ...related.see_also.map((item) => `  ${item}`), "");
+  return `${lines.join("\n")}\n`;
+}
+
+function commandHelp(name) {
+  const map = {
+    status: { usage: ["rewindrewind status"], see_also: ["help agent", "help auth"] },
+    init: { usage: ["rewindrewind init --api-key rr_xxx", "rewindrewind init --api-key-file /run/secrets/rr.key"], see_also: ["help sdk", "verify"] },
+    verify: { usage: ["rewindrewind verify", "rewindrewind verify --environment production"], see_also: ["help troubleshooting"] },
+    events: { usage: HELP_TOPICS.events.commands, see_also: ["help events", "help sdk"] },
+    exceptions: { usage: HELP_TOPICS.exceptions.commands, see_also: ["help exceptions", "help sdk"] },
+    issues: { usage: ["rewindrewind issues list --status open", "rewindrewind issues get <issue-id>", "rewindrewind issues resolve <issue-id> --reason <text>"], see_also: ["help exceptions"] },
+    api: { usage: ["rewindrewind api get /api/projects", "rewindrewind api post /v1/events --data @event.json", "rewindrewind api get /openapi.json --no-auth"], see_also: ["openapi"] },
+  };
+  return map[name];
+}
+
+function sdkGuide(id) {
+  const sdk = SDK_GUIDES[id];
+  if (!sdk) throw usage(`Unknown SDK: ${id}. Run \`rewindrewind help sdk\` or \`rewindrewind sdk list\`.`);
+  return sdk;
+}
+
+function normalizeSdkId(value) {
+  const id = String(value ?? "").toLowerCase();
+  const aliases = {
+    js: "browser",
+    javascript: "browser",
+    frontend: "browser",
+    "front-end": "browser",
+    web: "browser",
+    nodejs: "node",
+    "node.js": "node",
+    py: "python",
+    rb: "ruby",
+    golang: "go",
+  };
+  return aliases[id] ?? id;
+}
+
+function fence(language, code) {
+  return `\`\`\`${language}\n${code}\n\`\`\``;
 }
 
 // `status` is the agent's first step: it answers "do we have a working admin
@@ -313,7 +768,8 @@ async function initCommand(ctx) {
     project_id: project.id,
     project_key: projectKey,
     auth: apiKeyFile ? { admin_key_file: apiKeyFile } : { admin_key: maskSecret(adminKey) },
-    next_steps: ["rewindrewind verify", `${ctx.baseUrl}/docs/exception-capture-sdk`],
+    next_steps: ["rewindrewind verify", "rewindrewind help sdk", `${ctx.baseUrl}/docs/exception-capture-sdk`],
+    sdk_guides: Object.keys(SDK_GUIDES).map((id) => ({ id, command: `rewindrewind help sdk ${id}` })),
   };
 }
 
@@ -341,6 +797,7 @@ Project ingestion key (public, safe to embed): ${projectKey}
    rewindrewind events send --type checkout.completed --properties '{"total":42}'
 
 Confirm everything works:  rewindrewind verify
+SDK guides:                 rewindrewind help sdk
 Full docs:                 ${origin}/docs/exception-capture-sdk
 `;
 }

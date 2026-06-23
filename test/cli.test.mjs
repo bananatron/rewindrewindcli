@@ -25,10 +25,69 @@ test("installed bin symlink executes the cli", async () => {
     const link = join(temp, "rewindrewind");
     await symlink(join(thisDir, "..", "bin", "rewindrewind.mjs"), link);
     const { stdout } = await execFileP(link, ["--version"]);
-    assert.equal(stdout.trim(), "0.2.0");
+    assert.equal(stdout.trim(), "0.2.1");
   } finally {
     await rm(temp, { recursive: true, force: true });
   }
+});
+
+test("--help is a clean directory with topics, sdks, and commands", async () => {
+  const io = harness();
+  const status = await main(["--help"], io);
+
+  assert.equal(status, 0);
+  assert.match(io.stdout.text, /Help directory:/);
+  assert.match(io.stdout.text, /rewindrewind help sdk node/);
+  assert.match(io.stdout.text, /rewindrewind sdk list/);
+  assert.match(io.stdout.text, /Machine-readable help:/);
+});
+
+test("--help can emit a structured directory for agents", async () => {
+  const io = harness();
+  const status = await main(["--help", "--format", "json"], io);
+
+  assert.equal(status, 0);
+  const out = JSON.parse(io.stdout.text);
+  assert.equal(out.kind, "directory");
+  assert.equal(out.name, "rewindrewind");
+  assert.ok(out.topics.some((topic) => topic.id === "agent"));
+  assert.ok(out.sdk_guides.some((sdk) => sdk.id === "python"));
+});
+
+test("help sdk node prints copy-paste setup", async () => {
+  const io = harness();
+  const status = await main(["help", "sdk", "node"], io);
+
+  assert.equal(status, 0);
+  assert.match(io.stdout.text, /Node\.js SDK/);
+  assert.match(io.stdout.text, /npm install @rewindrewind\/sdk/);
+  assert.match(io.stdout.text, /initRewind/);
+  assert.match(io.stdout.text, /rewindrewind verify/);
+});
+
+test("help sdk node can emit structured JSON", async () => {
+  const io = harness();
+  const status = await main(["help", "sdk", "node", "--format", "json"], io);
+
+  assert.equal(status, 0);
+  const out = JSON.parse(io.stdout.text);
+  assert.equal(out.kind, "sdk");
+  assert.equal(out.sdk.id, "node");
+  assert.ok(out.sdk.install.includes("npm install @rewindrewind/sdk"));
+});
+
+test("sdk list and show expose SDK guidance as JSON commands", async () => {
+  const listIo = harness();
+  assert.equal(await main(["sdk", "list"], listIo), 0);
+  const list = JSON.parse(listIo.stdout.text);
+  assert.ok(list.sdks.some((sdk) => sdk.id === "browser"));
+  assert.ok(list.sdks.some((sdk) => sdk.id === "go"));
+
+  const showIo = harness();
+  assert.equal(await main(["sdk", "show", "python"], showIo), 0);
+  const show = JSON.parse(showIo.stdout.text);
+  assert.equal(show.sdk.id, "python");
+  assert.match(show.sdk.install[0], /pypi\/simple/);
 });
 
 test("health does not require an api key", async () => {
@@ -347,13 +406,17 @@ test("status reports ready when the admin key validates", async () => {
 function harness(overrides = {}) {
   const stdin = new PassThrough();
   stdin.end();
+  const env = {
+    XDG_CONFIG_HOME: join(tmpdir(), `rewindrewindcli-test-${process.pid}-${Math.random().toString(36).slice(2)}`),
+    ...(overrides.env ?? {}),
+  };
   return {
     stdin,
     stdout: capture(),
     stderr: capture(),
-    env: {},
+    env,
     fetch: async () => jsonResponse({ ok: true }),
-    ...overrides,
+    ...Object.fromEntries(Object.entries(overrides).filter(([key]) => key !== "env")),
   };
 }
 

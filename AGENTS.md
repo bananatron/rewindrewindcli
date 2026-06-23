@@ -56,6 +56,16 @@ This finds the project, fetches its **public project key** (`rrpub_…`), saves 
 config, and prints copy-paste setup for all three surfaces. Wire whichever surfaces
 this project needs into the codebase.
 
+For runtime-specific SDK instructions, ask the CLI instead of guessing:
+
+```sh
+rewindrewind help sdk
+rewindrewind help sdk node
+rewindrewind help sdk browser
+rewindrewind help sdk python
+rewindrewind sdk show node --format pretty
+```
+
 ## Step 3 — Verify it works
 
 ```sh
@@ -86,6 +96,8 @@ This sends a test event and exception and confirms they landed. Expect `ok: true
 ## Primitives — you can do EVERYTHING from the CLI
 
 ```sh
+rewindrewind help       agent | auth | sdk | events | exceptions | troubleshooting
+rewindrewind sdk        list | show <name> | snippet <name> | env
 rewindrewind projects   list | create | get | update | delete
 rewindrewind events     send | batch | list | raw
 rewindrewind exceptions send
@@ -106,4 +118,5 @@ scriptable. Add `--format pretty` to read it, `--quiet` to silence it.
 - Setup guide: https://rewindrewind.com/docs/exception-capture-sdk
 - OpenAPI: https://rewindrewind.com/openapi.json
 - Agent/LLM index: https://rewindrewind.com/llms.txt
-- CLI help: `rewindrewind --help`
+- CLI directory: `rewindrewind --help`
+- Structured CLI help: `rewindrewind --help --format json`

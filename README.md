@@ -17,6 +17,30 @@ npm install -g github:bananatron/rewindrewindcli
 rewindrewind --help
 ```
 
+## Help system
+
+`rewindrewind --help` is the top-level directory: first-run flow, help topics,
+SDK setup guides, commands, and global options. Drill in from there:
+
+```sh
+rewindrewind help agent
+rewindrewind help auth
+rewindrewind help sdk
+rewindrewind help sdk node
+rewindrewind help sdk python
+rewindrewind help troubleshooting
+```
+
+Agents can request structured help:
+
+```sh
+rewindrewind --help --format json
+rewindrewind help sdk node --format json
+rewindrewind sdk list
+rewindrewind sdk show python
+rewindrewind sdk snippet browser
+```
+
 ## For AI agents (Claude / Codex)
 
 Setting this up from an agent? Paste [`AGENTS.md`](AGENTS.md) into your agent — it is a
@@ -99,6 +123,18 @@ rewindrewind exceptions send --message "Stripe webhook failed" --level error --e
 
 ```sh
 rewindrewind events send --type checkout.completed --properties '{"plan":"pro","amount":4900}'
+```
+
+For current copy-paste SDK setup per runtime, use:
+
+```sh
+rewindrewind help sdk browser
+rewindrewind help sdk node
+rewindrewind help sdk bun
+rewindrewind help sdk ruby
+rewindrewind help sdk rails
+rewindrewind help sdk python
+rewindrewind help sdk go
 ```
 
 ## Common commands
