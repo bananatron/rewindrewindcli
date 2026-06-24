@@ -151,12 +151,20 @@ rewindrewind issues snooze ISSUE_ID
 rewindrewind issues archive ISSUE_ID
 rewindrewind issues lifecycle ISSUE_ID
 rewindrewind issues update ISSUE_ID --status ignored
+rewindrewind comments list ISSUE_ID
 rewindrewind comments create ISSUE_ID --body "Deployed fix."
+rewindrewind comments update ISSUE_ID COMMENT_ID --body "Deployed fix in web@1.4.3."
+rewindrewind comments delete ISSUE_ID COMMENT_ID
 rewindrewind sourcemaps upload --release web@1.4.2 --file dist/app.js.map --file-name app.js.map
 rewindrewind export --limit 500 --include-raw
 rewindrewind ingestion-health
 rewindrewind retention run
 ```
+
+Comments created or edited through the CLI are attributed to the admin key's
+name and shown with an "API" tag in the dashboard, so it's clear they came from
+automation rather than a person. Editing a comment keeps the original on record;
+the dashboard marks edited comments but never loses the prior text.
 
 ## Projects
 

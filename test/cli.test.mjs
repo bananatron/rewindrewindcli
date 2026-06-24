@@ -283,6 +283,30 @@ test("issues resolve posts to the lifecycle endpoint with the admin key", async 
   assert.deepEqual(seen[0].body, { reason: "fixed in web@1.2.3" });
 });
 
+test("comments create and update post to the comments endpoint with the admin key", async () => {
+  const seen = [];
+  const io = harness({
+    env: { REWINDREWIND_API_KEY: "rr_admin_secret", REWINDREWIND_PROJECT_ID: "p1", REWINDREWIND_BASE_URL: "https://rw.test" },
+    fetch: async (url, init) => {
+      seen.push({ url: String(url), method: init.method, auth: init.headers.authorization, body: init.body && JSON.parse(init.body) });
+      return jsonResponse({ ok: true, comment: { id: "c1", body: "Deployed fix." } });
+    },
+  });
+
+  let status = await main(["comments", "create", "i1", "--body", "Deployed fix."], io);
+  assert.equal(status, 0);
+  assert.equal(seen[0].url, "https://rw.test/api/projects/p1/issues/i1/comments");
+  assert.equal(seen[0].method, "POST");
+  assert.equal(seen[0].auth, "Bearer rr_admin_secret");
+  assert.deepEqual(seen[0].body, { body: "Deployed fix." });
+
+  status = await main(["comments", "update", "i1", "c1", "--body", "Deployed fix in web@1.4.3."], io);
+  assert.equal(status, 0);
+  assert.equal(seen[1].url, "https://rw.test/api/projects/p1/issues/i1/comments/c1");
+  assert.equal(seen[1].method, "PATCH");
+  assert.deepEqual(seen[1].body, { body: "Deployed fix in web@1.4.3." });
+});
+
 test("init configures from an admin key and stores the project key", async () => {
   const temp = await mkdtemp(join(tmpdir(), "rewindrewindcli-init-"));
   try {
