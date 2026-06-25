@@ -95,13 +95,15 @@ const COMMON_PRIMITIVES = {
   },
 };
 
+const JS_SDK_PACKAGES = ["@rewindrewind/sdk", "@rewindrewind/node"];
+
 const SDK_GUIDES = {
   browser: {
     id: "browser",
     label: "Browser JavaScript",
     use_when: "Frontend apps that need uncaught error, unhandled rejection, and product event capture.",
     docs_url: `${DOCS_URL}#javascript-browser-apps`,
-    install: ["npm install @rewindrewind/sdk"],
+    install: ["<script src=\"https://rewindrewind.com/sdk/v1/rewind.js\"></script>", "or bundled apps: npm install @rewindrewind/sdk"],
     env: ["VITE_REWINDREWIND_PROJECT_KEY=rrpub_xxx", "VITE_REWINDREWIND_ENDPOINT=https://rewindrewind.com"],
     files: ["src/observability.ts or your app entrypoint"],
     verify: ["rewindrewind verify", "Trigger a handled test capture from the browser and check issues/events."],
@@ -151,7 +153,7 @@ export const rewind = initRewind({
     label: "Node.js",
     use_when: "Node servers, workers, scripts, queues, and CLIs.",
     docs_url: `${DOCS_URL}#nodejs-apps`,
-    install: ["npm install @rewindrewind/sdk"],
+    install: ["npm install @rewindrewind/sdk", "or existing Node package: npm install @rewindrewind/node"],
     env: ["REWINDREWIND_PROJECT_KEY=rrpub_xxx", "REWINDREWIND_ENDPOINT=https://rewindrewind.com", "REWINDREWIND_RELEASE=<git-sha-or-version>"],
     files: ["src/observability.ts", "server entrypoint before routes/jobs start"],
     verify: ["rewindrewind verify", "Run one code path that calls captureEvent or captureException."],
@@ -173,7 +175,7 @@ export const rewind = initRewind({
     ],
     upgrade: {
       modes: ["package", "vendor"],
-      hints: ["Package mode updates @rewindrewind/sdk through npm/pnpm/yarn/bun.", "Vendor mode should refresh the generated observability helper and rerun tests."],
+      hints: ["Package mode updates @rewindrewind/sdk or @rewindrewind/node through npm/pnpm/yarn/bun.", "Vendor mode should refresh the generated observability helper and rerun tests."],
     },
     snippets: [
       {
@@ -210,7 +212,7 @@ export const rewind = initRewind({
     label: "Bun",
     use_when: "Bun servers and workers.",
     docs_url: `${DOCS_URL}#bun-apps`,
-    install: ["bun add @rewindrewind/sdk"],
+    install: ["bun add @rewindrewind/sdk", "or existing Node package: bun add @rewindrewind/node"],
     env: ["REWINDREWIND_PROJECT_KEY=rrpub_xxx", "REWINDREWIND_ENDPOINT=https://rewindrewind.com"],
     files: ["Bun entrypoint before Bun.serve"],
     verify: ["rewindrewind verify"],
@@ -231,7 +233,7 @@ export const rewind = initRewind({
     ],
     upgrade: {
       modes: ["package", "vendor"],
-      hints: ["Package mode updates @rewindrewind/sdk through bun.", "Vendor mode should refresh the generated helper and rerun the app's tests."],
+      hints: ["Package mode updates @rewindrewind/sdk or @rewindrewind/node through bun.", "Vendor mode should refresh the generated helper and rerun the app's tests."],
     },
     snippets: [
       {
@@ -847,8 +849,8 @@ async function sdkUpgradePlan(ctx, targetRaw) {
 function sdkUpdatePurpose(sdk, mode) {
   const packageCommands = {
     browser: "If using package mode, update @rewindrewind/sdk; CDN mode updates from /sdk/v1/rewind.js automatically.",
-    node: "Update @rewindrewind/sdk with the project's package manager, or refresh the vendored helper in vendor mode.",
-    bun: "Update @rewindrewind/sdk with bun, or refresh the vendored helper in vendor mode.",
+    node: "Update @rewindrewind/sdk or @rewindrewind/node with the project's package manager, or refresh the vendored helper in vendor mode.",
+    bun: "Update @rewindrewind/sdk or @rewindrewind/node with bun, or refresh the vendored helper in vendor mode.",
     ruby: "Update rewind_rewind with bundler/rubygems, or refresh the vendored helper in vendor mode.",
     rails: "Update rewind_rewind-rails with bundler, then boot Rails and exercise request/job error paths.",
     python: "Update rewind-rewind with pip/uv/poetry, or refresh the vendored helper in vendor mode.",
@@ -865,16 +867,17 @@ async function detectProjectSdks(ctx) {
     const evidence = ["package.json"];
     let id = "node";
     let confidence = "medium";
-    if (deps.next || deps["@remix-run/node"]) {
+    if (deps.next || deps["@remix-run/node"] || deps.hono || deps.express || deps.fastify) {
       id = "node";
       confidence = "high";
-      evidence.push(deps.next ? "next dependency" : "remix dependency");
+      evidence.push(deps.next ? "next dependency" : deps["@remix-run/node"] ? "remix dependency" : deps.hono ? "hono dependency" : deps.express ? "express dependency" : "fastify dependency");
     } else if (deps.vite || deps.react || deps.vue || deps.svelte || deps["@angular/core"]) {
       id = "browser";
       confidence = "high";
       evidence.push("frontend dependency");
     }
-    if (deps["@rewindrewind/sdk"]) evidence.push("@rewindrewind/sdk dependency");
+    const jsSdkPackage = JS_SDK_PACKAGES.find((name) => deps[name]);
+    if (jsSdkPackage) evidence.push(`${jsSdkPackage} dependency`);
     detections.push({ id, confidence, evidence });
     if (id !== "browser" && (deps.vite || deps.react || deps.vue || deps.svelte)) {
       detections.push({ id: "browser", confidence: "medium", evidence: ["package.json", "frontend dependency"] });
@@ -919,7 +922,8 @@ async function sdkInstallState(ctx, sdkId) {
   const packageJson = await readProjectJson(ctx, "package.json");
   if ((sdkId === "node" || sdkId === "browser" || sdkId === "bun") && packageJson) {
     const deps = { ...(packageJson.dependencies ?? {}), ...(packageJson.devDependencies ?? {}) };
-    if (deps["@rewindrewind/sdk"]) return { found: true, mode: "package", detail: `@rewindrewind/sdk ${deps["@rewindrewind/sdk"]}` };
+    const packageName = JS_SDK_PACKAGES.find((name) => deps[name]);
+    if (packageName) return { found: true, mode: "package", detail: `${packageName} ${deps[packageName]}` };
   }
   const gemfile = await readProjectFile(ctx, "Gemfile");
   if ((sdkId === "ruby" || sdkId === "rails") && gemfile && /rewind_rewind/.test(gemfile)) {

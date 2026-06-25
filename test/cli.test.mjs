@@ -121,6 +121,24 @@ test("sdk doctor detects a frontend package and reports setup checks", async () 
   }
 });
 
+test("sdk doctor recognizes the existing node package name", async () => {
+  const temp = await mkdtemp(join(tmpdir(), "rewindrewindcli-doctor-node-"));
+  try {
+    await writeFile(join(temp, "package.json"), JSON.stringify({
+      dependencies: { hono: "^4.0.0", "@rewindrewind/node": "^0.2.1" },
+    }));
+    const io = harness({ cwd: temp, env: { REWINDREWIND_PROJECT_KEY: "rrpub_pub" } });
+    assert.equal(await main(["sdk", "doctor"], io), 0);
+    const out = JSON.parse(io.stdout.text);
+    assert.equal(out.target.id, "node");
+    assert.ok(out.detected[0].evidence.includes("hono dependency"));
+    assert.match(out.checks.find((check) => check.id === "sdk-reference").detail, /@rewindrewind\/node/);
+    assert.equal(out.checks.find((check) => check.id === "sdk-reference").ok, true);
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
 test("sdk upgrade prints an agent-readable plan without editing files", async () => {
   const temp = await mkdtemp(join(tmpdir(), "rewindrewindcli-upgrade-"));
   try {
