@@ -25,7 +25,7 @@ test("installed bin symlink executes the cli", async () => {
     const link = join(temp, "rewindrewind");
     await symlink(join(thisDir, "..", "bin", "rewindrewind.mjs"), link);
     const { stdout } = await execFileP(link, ["--version"]);
-    assert.equal(stdout.trim(), "0.2.1");
+    assert.equal(stdout.trim(), "0.3.0");
   } finally {
     await rm(temp, { recursive: true, force: true });
   }
@@ -82,12 +82,59 @@ test("sdk list and show expose SDK guidance as JSON commands", async () => {
   const list = JSON.parse(listIo.stdout.text);
   assert.ok(list.sdks.some((sdk) => sdk.id === "browser"));
   assert.ok(list.sdks.some((sdk) => sdk.id === "go"));
+  assert.ok(list.concepts.some((concept) => concept.id === "events"));
 
   const showIo = harness();
   assert.equal(await main(["sdk", "show", "python"], showIo), 0);
   const show = JSON.parse(showIo.stdout.text);
   assert.equal(show.sdk.id, "python");
   assert.match(show.sdk.install[0], /pypi\/simple/);
+  assert.ok(show.sdk.integration_primitives.some((primitive) => primitive.id === "capture-event"));
+});
+
+test("sdk primitives exposes compact agent wiring guidance", async () => {
+  const io = harness();
+  assert.equal(await main(["sdk", "primitives", "rails"], io), 0);
+  const out = JSON.parse(io.stdout.text);
+  assert.equal(out.sdk.id, "rails");
+  assert.ok(out.concepts.some((concept) => concept.id === "exceptions"));
+  assert.ok(out.integration_primitives.some((primitive) => primitive.id === "capture-unhandled-exceptions"));
+  assert.ok(out.hook_hints.some((hint) => hint.shape === "rails"));
+  assert.match(out.commands.doctor, /sdk doctor rails/);
+});
+
+test("sdk doctor detects a frontend package and reports setup checks", async () => {
+  const temp = await mkdtemp(join(tmpdir(), "rewindrewindcli-doctor-"));
+  try {
+    await writeFile(join(temp, "package.json"), JSON.stringify({
+      dependencies: { vite: "^6.0.0", "@rewindrewind/sdk": "^0.3.0" },
+    }));
+    const io = harness({ cwd: temp, env: { REWINDREWIND_PROJECT_KEY: "rrpub_pub" } });
+    assert.equal(await main(["sdk", "doctor"], io), 0);
+    const out = JSON.parse(io.stdout.text);
+    assert.equal(out.target.id, "browser");
+    assert.ok(out.detected.some((item) => item.id === "browser"));
+    assert.equal(out.checks.find((check) => check.id === "project-key").ok, true);
+    assert.equal(out.checks.find((check) => check.id === "sdk-reference").ok, true);
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test("sdk upgrade prints an agent-readable plan without editing files", async () => {
+  const temp = await mkdtemp(join(tmpdir(), "rewindrewindcli-upgrade-"));
+  try {
+    await writeFile(join(temp, "Gemfile"), "source \"https://rubygems.org\"\ngem \"rails\"\ngem \"rewind_rewind-rails\"\n");
+    const io = harness({ cwd: temp });
+    assert.equal(await main(["sdk", "upgrade", "rails", "--mode", "package"], io), 0);
+    const out = JSON.parse(io.stdout.text);
+    assert.equal(out.target.id, "rails");
+    assert.equal(out.mode, "package");
+    assert.ok(out.plan.some((step) => step.step === "review-primitives"));
+    assert.ok(out.agent_instructions.some((item) => /framework conventions/.test(item)));
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
 });
 
 test("health does not require an api key", async () => {

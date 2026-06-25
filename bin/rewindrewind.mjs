@@ -6,7 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const DEFAULT_BASE_URL = "https://rewindrewind.com";
-const VERSION = "0.2.1";
+const VERSION = "0.3.0";
 
 // RewindRewind uses two kinds of key, and the CLI maps each command to the right
 // one automatically:
@@ -25,7 +25,7 @@ const COMMAND_DIRECTORY = [
   { command: "init", summary: "Configure auth, choose a project, fetch the public project key, print setup snippets." },
   { command: "verify", summary: "Send test event and exception data and confirm the setup works." },
   { command: "help [topic]", summary: "Show task help. Topics: agent, auth, sdk, events, exceptions, troubleshooting." },
-  { command: "sdk list|show|snippet|env", summary: "Machine-readable SDK setup pointers and snippets." },
+  { command: "sdk list|show|snippet|env|primitives|doctor|upgrade", summary: "Machine-readable SDK setup pointers, agent hints, doctor checks, and upgrade plans." },
   { command: "configure | config get|set|unset", summary: "Read and write CLI config." },
   { command: "projects list|create|get|update|delete", summary: "Manage projects with an admin key." },
   { command: "events send|batch|list|raw", summary: "Send or inspect product analytics events." },
@@ -48,6 +48,53 @@ const GLOBAL_OPTIONS = [
   { option: "--quiet | --verbose", summary: "Suppress normal output or print request URLs." },
 ];
 
+const CORE_CONCEPTS = [
+  {
+    id: "events",
+    label: "App events",
+    summary: "Product or application facts such as checkout.completed. They are expected, queryable telemetry and should include type plus properties.",
+    ingest: "/v1/events",
+    cli: "rewindrewind events send --type checkout.completed --properties '{\"total\":42}'",
+    docs_url: `${DOCS_URL}#events`,
+  },
+  {
+    id: "exceptions",
+    label: "Exceptions",
+    summary: "Failures or error reports. They group into issues and should preserve message, stack, environment, release, and useful context.",
+    ingest: "/v1/exceptions",
+    cli: "rewindrewind exceptions send --message \"Stripe webhook failed\" --level error",
+    docs_url: `${DOCS_URL}#exceptions`,
+  },
+];
+
+const COMMON_PRIMITIVES = {
+  initialize: {
+    id: "initialize-client",
+    purpose: "Create one client during app boot with project key, environment, release, and service tags.",
+    required: true,
+  },
+  unhandled: {
+    id: "capture-unhandled-exceptions",
+    purpose: "Report request, job, or process-boundary failures before re-raising or preserving normal framework behavior.",
+    required: true,
+  },
+  handled: {
+    id: "capture-handled-exception",
+    purpose: "Expose a small call for intentionally rescued errors that should still create or update an issue.",
+    required: false,
+  },
+  event: {
+    id: "capture-event",
+    purpose: "Expose a small call for app events with a stable type and JSON properties.",
+    required: false,
+  },
+  flush: {
+    id: "flush-on-shutdown",
+    purpose: "Drain pending telemetry before CLI, worker, serverless, or process shutdown exits.",
+    required: "workers_clis_serverless",
+  },
+};
+
 const SDK_GUIDES = {
   browser: {
     id: "browser",
@@ -58,6 +105,24 @@ const SDK_GUIDES = {
     env: ["VITE_REWINDREWIND_PROJECT_KEY=rrpub_xxx", "VITE_REWINDREWIND_ENDPOINT=https://rewindrewind.com"],
     files: ["src/observability.ts or your app entrypoint"],
     verify: ["rewindrewind verify", "Trigger a handled test capture from the browser and check issues/events."],
+    agent_hints: [
+      "Prefer the CDN script when there is no bundler or when the app wants live SDK updates.",
+      "For bundled apps, initialize before route rendering and reuse the exported client for app events.",
+    ],
+    integration_primitives: [
+      { id: "load-sdk", purpose: "Load the browser SDK from CDN or package before app code reports telemetry.", required: true },
+      COMMON_PRIMITIVES.initialize,
+      { id: "capture-browser-errors", purpose: "Capture uncaught errors and unhandled promise rejections.", required: true },
+      COMMON_PRIMITIVES.event,
+    ],
+    hook_hints: [
+      { shape: "plain-html", likely_hooks: ["<head> script tag", "inline RewindRewind.init call after the script"] },
+      { shape: "bundled-spa", likely_hooks: ["src/observability.ts", "main.tsx/main.jsx before rendering", "router or action handlers for app events"] },
+    ],
+    upgrade: {
+      modes: ["cdn", "package"],
+      hints: ["CDN mode updates from /sdk/v1/rewind.js automatically.", "Package mode should be checked by the package manager or `rewindrewind sdk upgrade browser`."],
+    },
     snippets: [
       {
         title: "Initialize",
@@ -90,6 +155,26 @@ export const rewind = initRewind({
     env: ["REWINDREWIND_PROJECT_KEY=rrpub_xxx", "REWINDREWIND_ENDPOINT=https://rewindrewind.com", "REWINDREWIND_RELEASE=<git-sha-or-version>"],
     files: ["src/observability.ts", "server entrypoint before routes/jobs start"],
     verify: ["rewindrewind verify", "Run one code path that calls captureEvent or captureException."],
+    agent_hints: [
+      "Initialize once near process startup before routes, jobs, or scripts run.",
+      "For frameworks, wire unhandled exceptions at the request or job boundary and preserve normal error propagation.",
+    ],
+    integration_primitives: [
+      COMMON_PRIMITIVES.initialize,
+      COMMON_PRIMITIVES.unhandled,
+      COMMON_PRIMITIVES.handled,
+      COMMON_PRIMITIVES.event,
+      COMMON_PRIMITIVES.flush,
+    ],
+    hook_hints: [
+      { shape: "express/fastify/hono", likely_hooks: ["observability module", "request error middleware or onError hook", "process unhandledRejection/uncaughtException only as a last boundary"] },
+      { shape: "nextjs/remix/server", likely_hooks: ["server entrypoint or instrumentation file", "route/action error boundary", "server-side event helper"] },
+      { shape: "worker/cli", likely_hooks: ["script startup", "job wrapper try/catch", "finally/defer-style flush before exit"] },
+    ],
+    upgrade: {
+      modes: ["package", "vendor"],
+      hints: ["Package mode updates @rewindrewind/sdk through npm/pnpm/yarn/bun.", "Vendor mode should refresh the generated observability helper and rerun tests."],
+    },
     snippets: [
       {
         title: "Initialize",
@@ -129,6 +214,25 @@ export const rewind = initRewind({
     env: ["REWINDREWIND_PROJECT_KEY=rrpub_xxx", "REWINDREWIND_ENDPOINT=https://rewindrewind.com"],
     files: ["Bun entrypoint before Bun.serve"],
     verify: ["rewindrewind verify"],
+    agent_hints: [
+      "Initialize before Bun.serve or worker startup.",
+      "Wire request errors at the framework boundary and call flush for short-lived scripts.",
+    ],
+    integration_primitives: [
+      COMMON_PRIMITIVES.initialize,
+      COMMON_PRIMITIVES.unhandled,
+      COMMON_PRIMITIVES.handled,
+      COMMON_PRIMITIVES.event,
+      COMMON_PRIMITIVES.flush,
+    ],
+    hook_hints: [
+      { shape: "bun-server", likely_hooks: ["entrypoint before Bun.serve", "fetch handler try/catch or framework onError", "process shutdown flush"] },
+      { shape: "bun-worker", likely_hooks: ["worker startup", "job wrapper", "finally block flush"] },
+    ],
+    upgrade: {
+      modes: ["package", "vendor"],
+      hints: ["Package mode updates @rewindrewind/sdk through bun.", "Vendor mode should refresh the generated helper and rerun the app's tests."],
+    },
     snippets: [
       {
         title: "Initialize",
@@ -154,6 +258,26 @@ const rewind = initRewind({
     env: ["REWINDREWIND_PROJECT_KEY=rrpub_xxx", "REWINDREWIND_ENDPOINT=https://rewindrewind.com"],
     files: ["config/observability.rb or app boot file"],
     verify: ["rewindrewind verify"],
+    agent_hints: [
+      "Initialize once during app boot and keep a reusable client/helper available.",
+      "For unknown Ruby apps, look for Rack config, worker boot files, or top-level job wrappers before adding global rescue behavior.",
+    ],
+    integration_primitives: [
+      COMMON_PRIMITIVES.initialize,
+      COMMON_PRIMITIVES.unhandled,
+      COMMON_PRIMITIVES.handled,
+      COMMON_PRIMITIVES.event,
+      COMMON_PRIMITIVES.flush,
+    ],
+    hook_hints: [
+      { shape: "rack", likely_hooks: ["config.ru", "Rack middleware", "app boot file"] },
+      { shape: "plain-ruby-worker", likely_hooks: ["worker boot file", "job execution wrapper", "at_exit flush"] },
+      { shape: "script", likely_hooks: ["top-level begin/rescue", "at_exit flush", "explicit capture_event/capture_exception helper"] },
+    ],
+    upgrade: {
+      modes: ["package", "vendor"],
+      hints: ["Package mode updates rewind_rewind through bundler/rubygems.", "Vendor mode should refresh the generated Ruby helper and rerun tests/jobs."],
+    },
     snippets: [
       {
         title: "Initialize",
@@ -179,6 +303,25 @@ REWIND = RewindRewind::Client.new(
     env: ["REWINDREWIND_PROJECT_KEY=rrpub_xxx", "REWINDREWIND_RELEASE=<git-sha-or-version>"],
     files: ["Gemfile", "config/initializers/rewind_rewind.rb"],
     verify: ["rewindrewind verify"],
+    agent_hints: [
+      "Rails ergonomics come from using framework boundaries: initializer, middleware, ActiveJob, and optional job adapters.",
+      "Preserve Rails error handling and re-raise after capture unless the app already intentionally swallows the error.",
+    ],
+    integration_primitives: [
+      COMMON_PRIMITIVES.initialize,
+      COMMON_PRIMITIVES.unhandled,
+      COMMON_PRIMITIVES.handled,
+      COMMON_PRIMITIVES.event,
+      COMMON_PRIMITIVES.flush,
+    ],
+    hook_hints: [
+      { shape: "rails", likely_hooks: ["config/initializers/rewind_rewind.rb", "Rack middleware", "ActiveJob around_perform/rescue_from", "Sidekiq server middleware if sidekiq is present"] },
+      { shape: "rails-api", likely_hooks: ["initializer", "ActionController rescue/report hook", "middleware before request completion"] },
+    ],
+    upgrade: {
+      modes: ["package", "vendor"],
+      hints: ["Package mode updates rewind_rewind-rails with bundler.", "After upgrade, boot Rails and run request/job tests that exercise error paths."],
+    },
     snippets: [
       {
         title: "Initializer",
@@ -202,6 +345,26 @@ end`,
     env: ["REWINDREWIND_PROJECT_KEY=rrpub_xxx", "REWINDREWIND_ENDPOINT=https://rewindrewind.com"],
     files: ["app startup module", "requirements.txt"],
     verify: ["rewindrewind verify"],
+    agent_hints: [
+      "Initialize once during app startup and wire framework middleware when available.",
+      "For scripts and workers, capture at the job boundary and flush before process exit.",
+    ],
+    integration_primitives: [
+      COMMON_PRIMITIVES.initialize,
+      COMMON_PRIMITIVES.unhandled,
+      COMMON_PRIMITIVES.handled,
+      COMMON_PRIMITIVES.event,
+      COMMON_PRIMITIVES.flush,
+    ],
+    hook_hints: [
+      { shape: "wsgi", likely_hooks: ["app startup module", "WSGI middleware", "request error handler"] },
+      { shape: "asgi", likely_hooks: ["ASGI middleware", "lifespan startup/shutdown", "exception handler"] },
+      { shape: "worker/cli", likely_hooks: ["job wrapper", "top-level main", "finally flush"] },
+    ],
+    upgrade: {
+      modes: ["package", "vendor"],
+      hints: ["Package mode updates rewind-rewind through pip/uv/poetry.", "Vendor mode should refresh the generated Python helper and run tests."],
+    },
     snippets: [
       {
         title: "Initialize",
@@ -235,6 +398,26 @@ app.wsgi_app = RewindMiddleware(app.wsgi_app)`,
     env: ["REWINDREWIND_PROJECT_KEY=rrpub_xxx", "REWINDREWIND_ENDPOINT=https://rewindrewind.com"],
     files: ["main.go or observability package"],
     verify: ["rewindrewind verify"],
+    agent_hints: [
+      "Initialize in main or the service constructor, then pass/use the client at request and job boundaries.",
+      "Go apps are usually explicit: prefer middleware or wrappers over hidden global behavior.",
+    ],
+    integration_primitives: [
+      COMMON_PRIMITIVES.initialize,
+      COMMON_PRIMITIVES.unhandled,
+      COMMON_PRIMITIVES.handled,
+      COMMON_PRIMITIVES.event,
+      COMMON_PRIMITIVES.flush,
+    ],
+    hook_hints: [
+      { shape: "net/http", likely_hooks: ["main.go before ListenAndServe", "middleware wrapping http.Handler", "panic recovery middleware"] },
+      { shape: "gin/chi/echo/fiber", likely_hooks: ["framework middleware chain", "panic/recovery middleware", "request context enrichment"] },
+      { shape: "worker/cli", likely_hooks: ["main startup", "job execution wrapper", "defer Flush()"] },
+    ],
+    upgrade: {
+      modes: ["module", "vendor"],
+      hints: ["Module mode updates rewindrewind.com/go through go get.", "Vendor mode should refresh source and run go test ./... ."],
+    },
     snippets: [
       {
         title: "Initialize",
@@ -264,10 +447,11 @@ const HELP_TOPICS = {
       "Run `rewindrewind status` first.",
       "If `needs_api_key` is true, stop and ask the user for an admin API key that starts with rr_.",
       "Run `rewindrewind init` to fetch and save the public project key.",
-      "Wire the needed SDK surfaces into the codebase.",
+      "Run `rewindrewind sdk doctor` and `rewindrewind sdk primitives <name>` to inspect the app and map hooks.",
+      "Wire events and exceptions into the idiomatic framework boundaries.",
       "Run `rewindrewind verify` and report pass/fail.",
     ],
-    see_also: ["help auth", "help sdk", "help troubleshooting", `${DEFAULT_BASE_URL}/llms.txt`],
+    see_also: ["help auth", "help sdk", "sdk doctor", "sdk upgrade", `${DEFAULT_BASE_URL}/llms.txt`],
   },
   auth: {
     id: "auth",
@@ -283,14 +467,31 @@ const HELP_TOPICS = {
   sdk: {
     id: "sdk",
     title: "SDK Setup",
-    summary: "Use `rewindrewind help sdk <name>` for human setup and `rewindrewind sdk show <name>` for JSON.",
+    summary: "Use SDK guides as agent-readable primitives, not exhaustive framework installers.",
+    details: [
+      "Events are expected app facts; exceptions are failures that group into issues.",
+      "Agents should inspect the project, then map primitives into existing boot, request, job, and shutdown boundaries.",
+      "Humans can use hook hints to understand why an agent edits initializers, middleware, job wrappers, or app entrypoints.",
+    ],
+    commands: [
+      "rewindrewind sdk list",
+      "rewindrewind sdk show <name>",
+      "rewindrewind sdk primitives <name>",
+      "rewindrewind sdk doctor [name]",
+      "rewindrewind sdk upgrade [name]",
+      "rewindrewind sdk snippet <name>",
+    ],
     sdks: Object.keys(SDK_GUIDES),
-    see_also: ["sdk list", "sdk show node", "sdk snippet python", DOCS_URL],
+    see_also: ["sdk list", "sdk primitives node", "sdk doctor", "sdk upgrade rails", DOCS_URL],
   },
   events: {
     id: "events",
     title: "App Events",
     summary: "Product analytics events use the public project key.",
+    details: [
+      CORE_CONCEPTS[0].summary,
+      "Use stable event names and put variable details in JSON properties.",
+    ],
     commands: [
       "rewindrewind events send --type checkout.completed --properties '{\"total\":42}'",
       "rewindrewind events batch --file @events.json",
@@ -303,6 +504,10 @@ const HELP_TOPICS = {
     id: "exceptions",
     title: "Exceptions And Issues",
     summary: "SDKs and `exceptions send` ingest exceptions; issue commands manage grouped failures.",
+    details: [
+      CORE_CONCEPTS[1].summary,
+      "Capture at framework boundaries and preserve normal error propagation unless the app already handles the error.",
+    ],
     commands: [
       "rewindrewind exceptions send --message \"Stripe webhook failed\" --level error",
       "rewindrewind issues list --status open",
@@ -361,6 +566,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
       verbose: booleanOption(parsed.options, "verbose"),
       options: parsed.options,
       command: parsed.positionals,
+      cwd: io.cwd ?? process.cwd(),
     };
 
     const result = await dispatch(ctx);
@@ -472,24 +678,36 @@ function helpCommand(ctx) {
   writeHelp(ctx.streams.stdout, ctx.command.slice(1), ctx.options);
 }
 
-function sdkCommand(ctx, action) {
+async function sdkCommand(ctx, action) {
   const sdkId = normalizeSdkId(ctx.command[2]);
   if (!action || action === "list") {
     return {
       ok: true,
       docs_url: DOCS_URL,
+      concepts: CORE_CONCEPTS,
       sdks: Object.values(SDK_GUIDES).map((sdk) => ({
         id: sdk.id,
         label: sdk.label,
         use_when: sdk.use_when,
         help: `rewindrewind help sdk ${sdk.id}`,
         json: `rewindrewind sdk show ${sdk.id}`,
+        primitives: `rewindrewind sdk primitives ${sdk.id}`,
       })),
     };
   }
   if (action === "show") {
     const sdk = sdkGuide(sdkId);
     return { ok: true, sdk };
+  }
+  if (action === "primitives" || action === "primitive") {
+    const sdk = sdkGuide(sdkId);
+    return sdkPrimitivePayload(sdk);
+  }
+  if (action === "doctor" || action === "status") {
+    return sdkDoctor(ctx, sdkId || undefined);
+  }
+  if (action === "upgrade" || action === "update") {
+    return sdkUpgradePlan(ctx, sdkId || undefined);
   }
   if (action === "snippet" || action === "snippets") {
     const sdk = sdkGuide(sdkId);
@@ -513,7 +731,249 @@ function sdkCommand(ctx, action) {
       note: "Run `rewindrewind init` to fetch and save the project key after configuring an admin key.",
     };
   }
-  throw usage("Expected an sdk action: list, show <name>, snippet <name>, env.");
+  throw usage("Expected an sdk action: list, show <name>, primitives <name>, doctor [name], upgrade [name], snippet <name>, env.");
+}
+
+function sdkPrimitivePayload(sdk) {
+  return {
+    ok: true,
+    sdk: { id: sdk.id, label: sdk.label, use_when: sdk.use_when, docs_url: sdk.docs_url },
+    concepts: CORE_CONCEPTS,
+    integration_primitives: sdk.integration_primitives ?? [],
+    hook_hints: sdk.hook_hints ?? [],
+    agent_hints: sdk.agent_hints ?? [],
+    commands: {
+      doctor: `rewindrewind sdk doctor ${sdk.id}`,
+      upgrade_plan: `rewindrewind sdk upgrade ${sdk.id}`,
+      snippets: `rewindrewind sdk snippet ${sdk.id}`,
+      docs: sdk.docs_url,
+    },
+  };
+}
+
+async function sdkDoctor(ctx, targetRaw) {
+  const detections = await detectProjectSdks(ctx);
+  const target = targetRaw ? sdkGuide(targetRaw) : sdkGuide((detections[0]?.id ?? "node"));
+  const projectKey = await resolveKey(ctx, "project", { optional: true });
+  const adminKey = await resolveKey(ctx, "admin", { optional: true });
+  const installState = await sdkInstallState(ctx, target.id);
+  const checks = [
+    {
+      id: "project-key",
+      ok: Boolean(projectKey),
+      detail: projectKey ? "project ingestion key is configured" : "missing rrpub_ project key; run `rewindrewind init` or set REWINDREWIND_PROJECT_KEY",
+    },
+    {
+      id: "admin-key",
+      ok: Boolean(adminKey),
+      detail: adminKey ? "admin key is configured for management checks" : "missing rr_ admin key; ingestion can still work with only a project key",
+    },
+    {
+      id: "runtime-detected",
+      ok: detections.some((item) => item.id === target.id) || targetRaw === undefined ? true : null,
+      detail: detections.length ? detections.map((item) => `${item.id}:${item.confidence}`).join(", ") : "no obvious runtime files found",
+    },
+    {
+      id: "sdk-reference",
+      ok: installState.found ? true : null,
+      detail: installState.detail,
+    },
+  ];
+  return {
+    ok: checks.every((check) => check.ok !== false),
+    cwd: ctx.cwd,
+    target: { id: target.id, label: target.label, docs_url: target.docs_url },
+    detected: detections,
+    concepts: CORE_CONCEPTS,
+    checks,
+    hook_hints: target.hook_hints ?? [],
+    agent_hints: target.agent_hints ?? [],
+    next_steps: [
+      `rewindrewind sdk primitives ${target.id}`,
+      `rewindrewind sdk upgrade ${target.id}`,
+      "rewindrewind verify",
+      target.docs_url,
+    ],
+  };
+}
+
+async function sdkUpgradePlan(ctx, targetRaw) {
+  const detections = await detectProjectSdks(ctx);
+  const target = targetRaw ? sdkGuide(targetRaw) : sdkGuide((detections[0]?.id ?? "node"));
+  const installState = await sdkInstallState(ctx, target.id);
+  const mode = stringOption(ctx.options, "mode") ?? installState.mode ?? target.upgrade?.modes?.[0] ?? "package";
+  return {
+    ok: true,
+    cwd: ctx.cwd,
+    target: { id: target.id, label: target.label, docs_url: target.docs_url },
+    mode,
+    detected: detections,
+    current: installState,
+    plan: [
+      {
+        step: "doctor",
+        command: `rewindrewind sdk doctor ${target.id}`,
+        purpose: "Confirm keys, detected stack, and existing SDK references.",
+      },
+      {
+        step: "review-primitives",
+        command: `rewindrewind sdk primitives ${target.id}`,
+        purpose: "Map events and exceptions into the app's boot, request, job, and shutdown boundaries.",
+      },
+      {
+        step: "update-sdk",
+        purpose: sdkUpdatePurpose(target, mode),
+        hints: target.upgrade?.hints ?? [],
+      },
+      {
+        step: "verify",
+        command: "rewindrewind verify",
+        purpose: "Send a test event and exception and confirm ingestion.",
+      },
+      {
+        step: "run-app-tests",
+        purpose: "Run the project's normal tests or smoke checks around request/job error paths.",
+      },
+    ],
+    agent_instructions: [
+      "Inspect the project before editing; use framework conventions already present in the app.",
+      "Preserve normal error propagation after capture unless the existing app intentionally handles the error.",
+      "Keep event names stable and put variable details in properties.",
+      "Prefer a small local observability helper so application code does not spread SDK setup everywhere.",
+    ],
+  };
+}
+
+function sdkUpdatePurpose(sdk, mode) {
+  const packageCommands = {
+    browser: "If using package mode, update @rewindrewind/sdk; CDN mode updates from /sdk/v1/rewind.js automatically.",
+    node: "Update @rewindrewind/sdk with the project's package manager, or refresh the vendored helper in vendor mode.",
+    bun: "Update @rewindrewind/sdk with bun, or refresh the vendored helper in vendor mode.",
+    ruby: "Update rewind_rewind with bundler/rubygems, or refresh the vendored helper in vendor mode.",
+    rails: "Update rewind_rewind-rails with bundler, then boot Rails and exercise request/job error paths.",
+    python: "Update rewind-rewind with pip/uv/poetry, or refresh the vendored helper in vendor mode.",
+    go: "Update rewindrewind.com/go with go get, or refresh vendored source in vendor mode.",
+  };
+  return `${packageCommands[sdk.id] ?? "Update the SDK using the selected mode."} Selected mode: ${mode}.`;
+}
+
+async function detectProjectSdks(ctx) {
+  const detections = [];
+  const packageJson = await readProjectJson(ctx, "package.json");
+  if (packageJson) {
+    const deps = { ...(packageJson.dependencies ?? {}), ...(packageJson.devDependencies ?? {}) };
+    const evidence = ["package.json"];
+    let id = "node";
+    let confidence = "medium";
+    if (deps.next || deps["@remix-run/node"]) {
+      id = "node";
+      confidence = "high";
+      evidence.push(deps.next ? "next dependency" : "remix dependency");
+    } else if (deps.vite || deps.react || deps.vue || deps.svelte || deps["@angular/core"]) {
+      id = "browser";
+      confidence = "high";
+      evidence.push("frontend dependency");
+    }
+    if (deps["@rewindrewind/sdk"]) evidence.push("@rewindrewind/sdk dependency");
+    detections.push({ id, confidence, evidence });
+    if (id !== "browser" && (deps.vite || deps.react || deps.vue || deps.svelte)) {
+      detections.push({ id: "browser", confidence: "medium", evidence: ["package.json", "frontend dependency"] });
+    }
+  }
+
+  const gemfile = await readProjectFile(ctx, "Gemfile");
+  if (gemfile) {
+    const id = /\bgem\s+["']rails["']/.test(gemfile) ? "rails" : "ruby";
+    const evidence = ["Gemfile"];
+    if (/rewind_rewind/.test(gemfile)) evidence.push("rewind_rewind gem reference");
+    detections.push({ id, confidence: "high", evidence });
+  } else if (await readProjectFile(ctx, "config.ru")) {
+    detections.push({ id: "ruby", confidence: "medium", evidence: ["config.ru"] });
+  }
+
+  const goMod = await readProjectFile(ctx, "go.mod");
+  if (goMod) {
+    const evidence = ["go.mod"];
+    if (/rewindrewind\.com\/go/.test(goMod)) evidence.push("rewindrewind.com/go module reference");
+    detections.push({ id: "go", confidence: "high", evidence });
+  }
+
+  const pyproject = await readProjectFile(ctx, "pyproject.toml");
+  const requirements = await readProjectFile(ctx, "requirements.txt");
+  if (pyproject || requirements) {
+    const evidence = [pyproject ? "pyproject.toml" : null, requirements ? "requirements.txt" : null].filter(Boolean);
+    if (/rewind[-_]rewind/.test(`${pyproject ?? ""}\n${requirements ?? ""}`)) evidence.push("rewind-rewind dependency reference");
+    detections.push({ id: "python", confidence: "high", evidence });
+  }
+
+  const indexHtml = await readProjectFile(ctx, "index.html") ?? await readProjectFile(ctx, "public/index.html");
+  if (indexHtml && !detections.some((item) => item.id === "browser")) {
+    const evidence = [/rewindrewind\.com\/sdk\/v1\/rewind\.js/.test(indexHtml) ? "browser SDK script tag" : "index.html"];
+    detections.push({ id: "browser", confidence: "medium", evidence });
+  }
+
+  return dedupeDetections(detections);
+}
+
+async function sdkInstallState(ctx, sdkId) {
+  const packageJson = await readProjectJson(ctx, "package.json");
+  if ((sdkId === "node" || sdkId === "browser" || sdkId === "bun") && packageJson) {
+    const deps = { ...(packageJson.dependencies ?? {}), ...(packageJson.devDependencies ?? {}) };
+    if (deps["@rewindrewind/sdk"]) return { found: true, mode: "package", detail: `@rewindrewind/sdk ${deps["@rewindrewind/sdk"]}` };
+  }
+  const gemfile = await readProjectFile(ctx, "Gemfile");
+  if ((sdkId === "ruby" || sdkId === "rails") && gemfile && /rewind_rewind/.test(gemfile)) {
+    return { found: true, mode: "package", detail: "Gemfile references rewind_rewind" };
+  }
+  const goMod = await readProjectFile(ctx, "go.mod");
+  if (sdkId === "go" && goMod && /rewindrewind\.com\/go/.test(goMod)) {
+    return { found: true, mode: "module", detail: "go.mod references rewindrewind.com/go" };
+  }
+  const pythonDeps = `${await readProjectFile(ctx, "pyproject.toml") ?? ""}\n${await readProjectFile(ctx, "requirements.txt") ?? ""}`;
+  if (sdkId === "python" && /rewind[-_]rewind/.test(pythonDeps)) {
+    return { found: true, mode: "package", detail: "Python dependency file references rewind-rewind" };
+  }
+  const browserEntry = `${await readProjectFile(ctx, "index.html") ?? ""}\n${await readProjectFile(ctx, "public/index.html") ?? ""}`;
+  if (sdkId === "browser" && /rewindrewind\.com\/sdk\/v1\/rewind\.js/.test(browserEntry)) {
+    return { found: true, mode: "cdn", detail: "HTML references /sdk/v1/rewind.js" };
+  }
+  return { found: false, mode: undefined, detail: `No obvious ${sdkId} SDK reference found; inspect app-specific observability helpers too.` };
+}
+
+async function readProjectJson(ctx, relativePath) {
+  const text = await readProjectFile(ctx, relativePath);
+  if (!text) return undefined;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
+async function readProjectFile(ctx, relativePath) {
+  try {
+    return await readFile(resolve(ctx.cwd, relativePath), "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
+function dedupeDetections(detections) {
+  const byId = new Map();
+  for (const item of detections) {
+    const existing = byId.get(item.id);
+    if (!existing) {
+      byId.set(item.id, item);
+      continue;
+    }
+    const confidence = confidenceRank(item.confidence) > confidenceRank(existing.confidence) ? item.confidence : existing.confidence;
+    byId.set(item.id, { id: item.id, confidence, evidence: [...new Set([...existing.evidence, ...item.evidence])] });
+  }
+  return [...byId.values()].sort((a, b) => confidenceRank(b.confidence) - confidenceRank(a.confidence));
+}
+
+function confidenceRank(value) {
+  return { high: 3, medium: 2, low: 1 }[value] ?? 0;
 }
 
 function helpPayload(args = []) {
@@ -593,6 +1053,8 @@ Machine-readable help:
   rewindrewind --help --format json
   rewindrewind help sdk node --format json
   rewindrewind sdk list
+  rewindrewind sdk primitives node
+  rewindrewind sdk doctor
 `;
 }
 
@@ -628,11 +1090,22 @@ function renderSdkHelp(sdk) {
     "Where to wire it:",
     ...sdk.files.map((file) => `  ${file}`),
     "",
+    "Core concepts:",
+    "  App events are expected app facts with stable names and JSON properties.",
+    "  Exceptions are failures that group into issues and should preserve stack/context.",
+    "",
+    "Agent wiring:",
+    `  ${sdk.integration_primitives?.map((primitive) => primitive.id).join(", ")}`,
+    "",
+    "Hook hints:",
+    ...(sdk.hook_hints ?? []).map((hint) => `  ${hint.shape}: ${hint.likely_hooks.join("; ")}`),
+    "",
   ];
   for (const snippet of sdk.snippets) {
     lines.push(`${snippet.title}:`, fence(snippet.language, snippet.code), "");
   }
-  lines.push("Verify:", ...sdk.verify.map((cmd) => `  ${cmd}`), "", `Full docs: ${sdk.docs_url}`, "");
+  if (sdk.agent_hints?.length) lines.push("Agent hints:", ...sdk.agent_hints.map((hint) => `  ${hint}`), "");
+  lines.push("Verify:", ...sdk.verify.map((cmd) => `  ${cmd}`), "", `Full docs: ${sdk.docs_url}`, `Agent JSON: rewindrewind sdk primitives ${sdk.id}`, "");
   return `${lines.join("\n")}\n`;
 }
 
@@ -648,6 +1121,7 @@ function commandHelp(name) {
     status: { usage: ["rewindrewind status"], see_also: ["help agent", "help auth"] },
     init: { usage: ["rewindrewind init --api-key rr_xxx", "rewindrewind init --api-key-file /run/secrets/rr.key"], see_also: ["help sdk", "verify"] },
     verify: { usage: ["rewindrewind verify", "rewindrewind verify --environment production"], see_also: ["help troubleshooting"] },
+    sdk: { usage: HELP_TOPICS.sdk.commands, see_also: ["help sdk", "sdk primitives node", "sdk doctor", "sdk upgrade"] },
     events: { usage: HELP_TOPICS.events.commands, see_also: ["help events", "help sdk"] },
     exceptions: { usage: HELP_TOPICS.exceptions.commands, see_also: ["help exceptions", "help sdk"] },
     issues: { usage: ["rewindrewind issues list --status open", "rewindrewind issues get <issue-id>", "rewindrewind issues resolve <issue-id> --reason <text>"], see_also: ["help exceptions"] },

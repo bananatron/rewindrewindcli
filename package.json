@@ -1,6 +1,6 @@
 {
   "name": "rewindrewindcli",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "RewindRewind CLI — set up front-end exceptions, back-end exceptions, and app events, and drive the whole API.",
   "type": "module",
   "bin": {

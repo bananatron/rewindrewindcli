@@ -64,6 +64,9 @@ rewindrewind help sdk node
 rewindrewind help sdk browser
 rewindrewind help sdk python
 rewindrewind sdk show node --format pretty
+rewindrewind sdk primitives node --format pretty
+rewindrewind sdk doctor
+rewindrewind sdk upgrade
 ```
 
 ## Step 3 — Verify it works
@@ -97,7 +100,7 @@ This sends a test event and exception and confirms they landed. Expect `ok: true
 
 ```sh
 rewindrewind help       agent | auth | sdk | events | exceptions | troubleshooting
-rewindrewind sdk        list | show <name> | snippet <name> | env
+rewindrewind sdk        list | show <name> | primitives <name> | doctor [name] | upgrade [name] | snippet <name> | env
 rewindrewind projects   list | create | get | update | delete
 rewindrewind events     send | batch | list | raw
 rewindrewind exceptions send

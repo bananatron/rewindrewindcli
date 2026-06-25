@@ -2,6 +2,8 @@
 
 The RewindRewind command line. Built for humans and agents: no runtime dependencies, JSON output by default, and one command (`init`) that sets up all three surfaces — **front-end exceptions, back-end exceptions, and app events** — from a single key.
 
+The SDK help is agent-ready: it explains the primitives an agent needs to map into a project (`initialize-client`, request/job exception capture, app events, flush), while keeping framework-specific guidance as compact hook hints instead of trying to codify every framework.
+
 ## Install
 
 Run without installing, straight from this public repo (best for one-off setup and agents):
@@ -38,6 +40,9 @@ rewindrewind --help --format json
 rewindrewind help sdk node --format json
 rewindrewind sdk list
 rewindrewind sdk show python
+rewindrewind sdk primitives rails
+rewindrewind sdk doctor
+rewindrewind sdk upgrade
 rewindrewind sdk snippet browser
 ```
 
@@ -136,6 +141,16 @@ rewindrewind help sdk rails
 rewindrewind help sdk python
 rewindrewind help sdk go
 ```
+
+For agent-readable integration hints and upgrade planning:
+
+```sh
+rewindrewind sdk primitives node      # events vs exceptions, wiring primitives, hook hints
+rewindrewind sdk doctor [name]        # local stack/key/reference checks
+rewindrewind sdk upgrade [name]       # non-mutating upgrade plan for agents or humans
+```
+
+Agents should inspect the app, use the primitives, then wire RewindRewind into the idiomatic framework boundaries already present in the project. For example, Rails usually means an initializer plus middleware/job hooks; Go usually means explicit middleware/wrappers around `net/http`, framework handlers, workers, or CLIs.
 
 ## Common commands
 
