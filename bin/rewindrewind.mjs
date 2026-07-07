@@ -1457,7 +1457,7 @@ async function events(ctx, action) {
         ...payload,
         type: stringOption(ctx.options, "type") ?? payload.type,
         timestamp: stringOption(ctx.options, "timestamp") ?? payload.timestamp,
-        distinct_id: stringOption(ctx.options, "distinct-id") ?? payload.distinct_id,
+        identity_id: stringOption(ctx.options, "identity-id") ?? payload.identity_id,
         anonymous_id: stringOption(ctx.options, "anonymous-id") ?? payload.anonymous_id,
         environment: stringOption(ctx.options, "environment") ?? payload.environment,
         release: stringOption(ctx.options, "release") ?? payload.release,
@@ -1472,7 +1472,7 @@ async function events(ctx, action) {
   }
   if (action === "list") {
     return request(ctx, "GET", `/api/projects/${encodeURIComponent(projectId(ctx))}/events`, {
-      query: queryFromOptions(ctx.options, ["limit", "cursor", "type", "environment", "release", "source", "distinct_id", "distinct-id"]),
+      query: queryFromOptions(ctx.options, ["limit", "cursor", "type", "environment", "release", "source", "identity_id", "identity-id"]),
     });
   }
   if (action === "raw") {
