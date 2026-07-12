@@ -331,6 +331,45 @@ test("api routes /v1 paths to the project key and /api paths to the admin key", 
   assert.equal(seen[1].auth, "Bearer rr_admin_secret");
 });
 
+test("projects update configures and clears uptime settings", async () => {
+  const seen = [];
+  const io = harness({
+    env: {
+      REWINDREWIND_API_KEY: "rr_admin_secret",
+      REWINDREWIND_PROJECT_ID: "project_1",
+      REWINDREWIND_BASE_URL: "https://rw.test",
+    },
+    fetch: async (url, init) => {
+      seen.push({ url: String(url), method: init.method, body: JSON.parse(init.body) });
+      return jsonResponse({ ok: true, project: { id: "project_1" } });
+    },
+  });
+
+  assert.equal(await main([
+    "projects",
+    "update",
+    "--uptime-url",
+    "https://app.example.com/health",
+    "--uptime-enabled",
+    "true",
+  ], io), 0);
+  assert.deepEqual(seen[0], {
+    url: "https://rw.test/api/projects/project_1",
+    method: "PATCH",
+    body: { uptime_enabled: true, uptime_url: "https://app.example.com/health" },
+  });
+
+  assert.equal(await main([
+    "projects",
+    "update",
+    "--uptime-enabled",
+    "false",
+    "--uptime-url",
+    "null",
+  ], io), 0);
+  assert.deepEqual(seen[1].body, { uptime_enabled: false, uptime_url: null });
+});
+
 test("issues resolve posts to the lifecycle endpoint with the admin key", async () => {
   const seen = [];
   const io = harness({

@@ -1437,6 +1437,8 @@ async function projects(ctx, action) {
       ["max-indexed-properties", "max_indexed_properties", "number"],
       ["exception-burst-per-minute", "exception_burst_per_minute", "number"],
       ["source-map-bytes-limit", "source_map_bytes_limit", "number"],
+      ["uptime-enabled", "uptime_enabled", "boolean"],
+      ["uptime-url", "uptime_url", "nullableString"],
       ["disabled", "disabled", "boolean"],
       ["blocked-property-names", "blocked_property_names", "json"],
       ["indexing-policy", "indexing_policy", "json"],

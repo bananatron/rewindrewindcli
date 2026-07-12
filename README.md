@@ -196,6 +196,8 @@ rewindrewind projects list
 rewindrewind projects create --name "New App"
 rewindrewind projects get
 rewindrewind projects update --name "Production Web" --retention-days 90
+rewindrewind projects update --uptime-url "https://example.com/health" --uptime-enabled true
+rewindrewind projects update --uptime-enabled false --uptime-url null
 rewindrewind projects delete
 ```
 
