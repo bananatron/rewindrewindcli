@@ -132,8 +132,17 @@ rewindrewind projects create --name "New App"
 rewindrewind projects update --retention-days 90
 rewindrewind health-rules list
 rewindrewind health-rules create --data @health-rule.json
+rewindrewind metrics list
+rewindrewind metrics create --data @metric.json
+rewindrewind metrics update METRIC_ID --data -
 rewindrewind ingestion-health
 ```
+
+Health rules gate a project's status; metrics are the dashboard numbers beside
+them. Both take the same JSON specification shape and both support
+`--data @file.json` and `--data -`. `list` returns each definition's stored
+evaluation, which can lag a specification change — `rewindrewind metrics
+evaluate` recomputes every metric against current data.
 
 Track daily visits without storing a durable event for every page load:
 

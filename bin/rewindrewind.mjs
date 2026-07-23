@@ -29,6 +29,7 @@ const COMMAND_DIRECTORY = [
   { command: "configure | config get|set|unset", summary: "Read and write CLI config." },
   { command: "projects list|create|get|update|delete", summary: "Manage projects with an admin key." },
   { command: "health-rules list|get|create|update|delete", summary: "Configure project health rules from JSON files or stdin." },
+  { command: "metrics list|get|create|update|delete|evaluate", summary: "Configure project dashboard metrics from JSON files or stdin." },
   { command: "events send|batch|list|raw", summary: "Send or inspect product analytics events." },
   { command: "visits send|list", summary: "Send a daily visit/DAU signal, or read the per-day visit series." },
   { command: "exceptions send", summary: "Send an exception payload with the public project key." },
@@ -649,6 +650,8 @@ async function dispatch(ctx) {
     case "health-rules":
     case "healthrules":
       return healthRules(ctx, action);
+    case "metrics":
+      return metrics(ctx, action);
     case "events":
       return events(ctx, action);
     case "visits":
@@ -1140,7 +1143,8 @@ function commandHelp(name) {
     visits: { usage: ["rewindrewind visits send --environment production", "rewindrewind visits send --environment production --visitor-id user-42", "rewindrewind visits list --from 2026-07-01 --to 2026-07-13", "rewindrewind visits list --environment production"], see_also: ["health-rules", "openapi"] },
     exceptions: { usage: HELP_TOPICS.exceptions.commands, see_also: ["help exceptions", "help sdk"] },
     issues: { usage: ["rewindrewind issues list --status open", "rewindrewind issues get <issue-id>", "rewindrewind issues resolve <issue-id> --reason <text>", "rewindrewind issues ignore <issue-id> --reason <text>"], see_also: ["help exceptions"] },
-    "health-rules": { usage: ["rewindrewind health-rules list", "rewindrewind health-rules get <rule-id>", "rewindrewind health-rules create --data @rule.json", "rewindrewind health-rules update <rule-id> --data -", "rewindrewind health-rules delete <rule-id>"], see_also: ["openapi"] },
+    "health-rules": { usage: ["rewindrewind health-rules list", "rewindrewind health-rules get <rule-id>", "rewindrewind health-rules create --data @rule.json", "rewindrewind health-rules update <rule-id> --data -", "rewindrewind health-rules delete <rule-id>"], see_also: ["metrics", "openapi"] },
+    metrics: { usage: ["rewindrewind metrics list", "rewindrewind metrics get <metric-id>", "rewindrewind metrics create --data @metric.json", "rewindrewind metrics update <metric-id> --data -", "rewindrewind metrics delete <metric-id>", "rewindrewind metrics evaluate"], see_also: ["health-rules", "openapi"] },
     api: { usage: ["rewindrewind api get /api/projects", "rewindrewind api post /v1/events --data @event.json", "rewindrewind api get /openapi.json --no-auth"], see_also: ["openapi"] },
   };
   return map[name];
@@ -1480,6 +1484,36 @@ async function healthRules(ctx, action) {
     return request(ctx, "DELETE", `${base}/${encodeURIComponent(ruleId)}`);
   }
   throw usage("Expected a health-rules action: list, get, create, update, delete.");
+}
+
+async function metrics(ctx, action) {
+  const metricId = ctx.command[2];
+  const base = `/api/projects/${encodeURIComponent(projectId(ctx))}/metrics`;
+  if (action === "list") return request(ctx, "GET", base);
+  if (action === "get") {
+    if (!metricId) throw usage("Expected `metrics get <metric-id>`.");
+    return request(ctx, "GET", `${base}/${encodeURIComponent(metricId)}`);
+  }
+  if (action === "create") {
+    const body = await jsonInput(requiredOption(ctx.options, "data"), ctx.streams.stdin);
+    return request(ctx, "POST", base, { body });
+  }
+  if (action === "update") {
+    if (!metricId) throw usage("Expected `metrics update <metric-id> --data <json|@file|->`.");
+    const body = await jsonInput(requiredOption(ctx.options, "data"), ctx.streams.stdin);
+    return request(ctx, "PATCH", `${base}/${encodeURIComponent(metricId)}`, { body });
+  }
+  if (action === "delete") {
+    if (!metricId) throw usage("Expected `metrics delete <metric-id>`.");
+    return request(ctx, "DELETE", `${base}/${encodeURIComponent(metricId)}`);
+  }
+  if (action === "evaluate") {
+    // `list`/`get` serve the stored evaluation, which can lag a specification
+    // change. This recomputes every metric against current data.
+    const body = ctx.options.data === undefined ? {} : await jsonInput(ctx.options.data, ctx.streams.stdin);
+    return request(ctx, "POST", `${base}/evaluate`, { body });
+  }
+  throw usage("Expected a metrics action: list, get, create, update, delete, evaluate.");
 }
 
 async function events(ctx, action) {
@@ -2084,10 +2118,38 @@ function renderObjectLines(value, indent) {
 function renderObjectSummary(value, indent) {
   const prefix = " ".repeat(indent);
   if (value === null || typeof value !== "object") return [`${prefix}${String(value)}`];
+  const definition = renderDefinitionSummary(value);
+  if (definition) return [`${prefix}${definition}`];
   const summaryKeys = ["id", "name", "title", "type", "status", "message", "event_id", "issue_id"];
   const summary = summaryKeys.filter((key) => value[key] !== undefined).map((key) => `${key}=${value[key]}`).join("  ");
   if (summary) return [`${prefix}${summary}`];
   return renderObjectLines(value, indent);
+}
+
+// Health rules and metrics keep their name, source, and current reading inside
+// `specification`/`evaluation`, so the generic id-only summary hides
+// everything that tells one row from another in a list.
+function renderDefinitionSummary(value) {
+  const spec = value.specification;
+  if (!spec || typeof spec !== "object" || !spec.name) return undefined;
+  const parts = [spec.name];
+  if (value.id) parts.push(`id=${value.id}`);
+  const measure = spec.measure;
+  if (measure && typeof measure === "object" && measure.kind) {
+    const reads = [measure.event_type, measure.property].filter(Boolean).join(".");
+    parts.push(`measure=${reads ? `${measure.kind}(${reads})` : measure.kind}`);
+  }
+  const filters = spec.property_filters;
+  if (filters && typeof filters === "object" && Object.keys(filters).length > 0) {
+    parts.push(`where=${Object.entries(filters).map(([key, item]) => `${key}=${item}`).join(",")}`);
+  }
+  const evaluation = value.evaluation;
+  if (evaluation && typeof evaluation === "object") {
+    if (evaluation.status) parts.push(`status=${evaluation.status}`);
+    if (evaluation.value !== undefined && evaluation.value !== null) parts.push(`value=${evaluation.value}`);
+  }
+  if (spec.enabled === false) parts.push("disabled");
+  return parts.join("  ");
 }
 
 function labelize(value) {

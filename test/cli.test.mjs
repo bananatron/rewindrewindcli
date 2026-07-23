@@ -756,3 +756,89 @@ function jsonResponse(body, status = 200) {
     headers: { "content-type": "application/json" },
   });
 }
+
+test("metrics exposes complete CRUD for agents", async () => {
+  const seen = [];
+  const io = harness({
+    env: { REWINDREWIND_API_KEY: "rr_admin_secret", REWINDREWIND_PROJECT_ID: "p1", REWINDREWIND_BASE_URL: "https://rw.test" },
+    fetch: async (url, init) => {
+      seen.push({ url: String(url), method: init.method, body: init.body && JSON.parse(init.body) });
+      return jsonResponse({ ok: true, metrics: [], metric: { id: "mt_1" } });
+    },
+  });
+  const specification = JSON.stringify({
+    name: "Monthly ad spend",
+    measure: { kind: "event_latest", event_type: "ads.metrics.snapshot", property: "spend_cents_trailing_30d" },
+    property_filters: { audience_id: "__aggregate__", channel: "__all__" },
+  });
+
+  assert.equal(await main(["metrics", "list"], io), 0);
+  assert.equal(await main(["metrics", "get", "mt_1"], io), 0);
+  assert.equal(await main(["metrics", "create", "--data", specification], io), 0);
+  assert.equal(await main(["metrics", "update", "mt_1", "--data", specification], io), 0);
+  assert.equal(await main(["metrics", "delete", "mt_1"], io), 0);
+  assert.equal(await main(["metrics", "evaluate"], io), 0);
+
+  assert.deepEqual(seen.map(({ method, url }) => [method, url]), [
+    ["GET", "https://rw.test/api/projects/p1/metrics"],
+    ["GET", "https://rw.test/api/projects/p1/metrics/mt_1"],
+    ["POST", "https://rw.test/api/projects/p1/metrics"],
+    ["PATCH", "https://rw.test/api/projects/p1/metrics/mt_1"],
+    ["DELETE", "https://rw.test/api/projects/p1/metrics/mt_1"],
+    ["POST", "https://rw.test/api/projects/p1/metrics/evaluate"],
+  ]);
+  assert.deepEqual(seen[2].body, JSON.parse(specification));
+  assert.deepEqual(seen[3].body, JSON.parse(specification));
+});
+
+test("metrics accepts a specification on stdin like health-rules", async () => {
+  const seen = [];
+  const stdin = new PassThrough();
+  stdin.end(JSON.stringify({ name: "Piped" }));
+  const io = harness({
+    stdin,
+    env: { REWINDREWIND_API_KEY: "rr_admin_secret", REWINDREWIND_PROJECT_ID: "p1", REWINDREWIND_BASE_URL: "https://rw.test" },
+    fetch: async (url, init) => {
+      seen.push({ url: String(url), body: init.body && JSON.parse(init.body) });
+      return jsonResponse({ ok: true, metric: { id: "mt_1" } });
+    },
+  });
+
+  assert.equal(await main(["metrics", "update", "mt_1", "--data", "-"], io), 0);
+  assert.deepEqual(seen[0].body, { name: "Piped" });
+});
+
+test("metrics rejects an unknown action and a missing id", async () => {
+  const io = harness({ env: { REWINDREWIND_API_KEY: "rr_admin_secret", REWINDREWIND_PROJECT_ID: "p1" } });
+  assert.notEqual(await main(["metrics", "frobnicate"], io), 0);
+  assert.match(io.stderr.text, /list, get, create, update, delete, evaluate/);
+
+  const missing = harness({ env: { REWINDREWIND_API_KEY: "rr_admin_secret", REWINDREWIND_PROJECT_ID: "p1" } });
+  assert.notEqual(await main(["metrics", "get"], missing), 0);
+  assert.match(missing.stderr.text, /metrics get <metric-id>/);
+});
+
+test("definition lists identify each rule and metric, not just its id", async () => {
+  const io = harness({
+    env: { REWINDREWIND_API_KEY: "rr_admin_secret", REWINDREWIND_PROJECT_ID: "p1", REWINDREWIND_BASE_URL: "https://rw.test" },
+    fetch: async () => jsonResponse({
+      ok: true,
+      metrics: [{
+        id: "mt_1",
+        specification: {
+          name: "Monthly ad spend",
+          measure: { kind: "event_latest", event_type: "ads.metrics.snapshot", property: "spend_cents_trailing_30d" },
+          property_filters: { audience_id: "__aggregate__", channel: "__all__" },
+        },
+        evaluation: { value: 80974 },
+      }],
+    }),
+  });
+
+  assert.equal(await main(["metrics", "list"], io), 0);
+  assert.match(io.stdout.text, /Monthly ad spend/);
+  assert.match(io.stdout.text, /id=mt_1/);
+  assert.match(io.stdout.text, /measure=event_latest\(ads\.metrics\.snapshot\.spend_cents_trailing_30d\)/);
+  assert.match(io.stdout.text, /where=audience_id=__aggregate__,channel=__all__/);
+  assert.match(io.stdout.text, /value=80974/);
+});
